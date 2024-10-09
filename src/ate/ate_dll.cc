@@ -22,6 +22,8 @@ using provisioning::ate::AteClient;
 using namespace provisioning::ate;
 }  // namespace
 
+#define ASCII(val) (((val) > 9) ? (((val)-0xA) + 'A') : ((val) + '0'))
+
 std::string extractDNSNameFromCert(const char *certPath) {
   LOG(INFO) << "debug info: In call extractDNSNameFromCert";
   FILE *certFile = fopen(certPath, "r");
@@ -363,4 +365,130 @@ DLLEXPORT int CreateKeyAndCertificate(
   }
 
   return ConvertResponse(response, data, max_data_size);
+}
+
+// Get the time in milliseconds
+uint64_t getMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::high_resolution_clock::now().time_since_epoch())
+      .count();
+}
+
+DLLEXPORT int RegisterDeviceBMC(
+    ate_client_ptr client,          // In:      pointer to the client
+    const device_id_t *deviceID,    // In:      Identifies the specific device
+    const void *dme_pub_key,        // In:      sec public key
+    const size_t dme_pub_key_size,  // In:      sec public key size
+    const DeviceLifeCycle life_cycle,  // In:      life_cycle
+    const uint8_t year,                // In:      year
+    const uint8_t week,                // In:      week
+    const uint16_t lot_num,            // In:      lot number
+    const uint8_t wafer_id,            // In:      wafer id
+    const uint8_t x,                   // In:      x
+    const uint8_t y,                   // In:      y
+    const void *data,                  // In:      data buffer
+    const size_t data_size             // In:      data buffer size
+) {
+  LOG(INFO) << "debug info: In ate dll RegisterDeviceBMC";
+
+  // Get the time in milliseconds
+  auto milliseconds = getMilliseconds();
+
+  AteClient *ate = reinterpret_cast<AteClient *>(client);
+
+  pa::RegistrationRequest request;
+  pa::RegistrationResponse response;
+
+  device_id::DeviceRecord *device_record = request.mutable_device_record();
+  device_id::DeviceId *id = device_record->mutable_id();
+  device_id::Metadata *metadata =
+      device_record->mutable_data()->mutable_metadata();
+  device_id::DeviceData *device_data = device_record->mutable_data();
+
+  //  Initialize the device id message
+  id->mutable_hardware_origin()->set_silicon_creator_id(
+      device_id::SiliconCreatorId::SILICON_CREATOR_ID_NUVOTON);
+
+  LOG(INFO) << "id->mutable_hardware_origin()->product_id(): "
+            << id->mutable_hardware_origin()->product_id();
+
+  id->mutable_hardware_origin()->set_device_identification_number(
+      deviceID->hardware_origin.device_identification_number);
+
+  LOG(INFO) << "id->mutable_hardware_origin()->device_identification_number(): "
+            << id->mutable_hardware_origin()->device_identification_number();
+
+  id->set_sku_specific(
+      std::string((uint8_t *)deviceID->sku_specific,
+                  (uint8_t *)deviceID->sku_specific + SKU_SPECIFIC_SIZE));
+  id->set_crc32(deviceID->crc32);
+
+  // Initialize the metadata message
+  metadata->set_registration_state(device_id::DeviceRegistrationState::
+                                       DEVICE_REGISTRATION_STATE_PROVISIONED);
+  metadata->set_create_time_ms(milliseconds);
+  metadata->set_update_time_ms(milliseconds);
+  metadata->set_ate_id(ate->ate_id);
+  metadata->set_ate_raw("");
+  metadata->set_year(year);
+  metadata->set_week(week);
+  metadata->set_lot_num(lot_num);
+  metadata->set_wafer_id(wafer_id);
+  metadata->set_x(x);
+  metadata->set_y(y);
+  
+  // Initialize the data message
+  device_data->set_device_life_cycle(
+      static_cast<device_id::DeviceLifeCycle>(life_cycle));
+  device_data->set_payload(
+      std::string((uint8_t *)data, (uint8_t *)data + data_size));
+  device_data->mutable_metadata()->CopyFrom(*metadata);
+
+  // Initialize the device record message
+  device_record->set_sku(ate->Sku);
+  device_record->mutable_id()->CopyFrom(*id);
+  device_record->mutable_data()->CopyFrom(*device_data);
+
+  auto status = ate->SendDeviceRegistrationPayload(request, &response);
+  if (!status.ok()) {
+    LOG(ERROR) << "RegisterDeviceBMC failed with " << status.error_code()
+               << ": " << status.error_message();
+    return static_cast<int>(status.error_code());
+  }
+  LOG(INFO) << "return from ATE RegisterDeviceBMC";
+  return 0;
+}
+
+std::string bytesToStr(uint8_t *byteArray, size_t byteArraySize) {
+  std::string str;
+
+  for (size_t i = 0; i < byteArraySize; i++) {
+    str += ASCII(((byteArray[i]) >> 4) & 0x0F);
+    str += ASCII((byteArray[i]) & 0x0F);
+  }
+  return str;
+}
+
+#define IS_BLOB_CERT_TAG(tag)                                  \
+  ((tag == RSA_2048_KEY_CERT) || (tag == RSA_3072_KEY_CERT) || \
+   (tag == RSA_4096_KEY_CERT) || (tag == ECC_256_KEY_CERT) ||  \
+   (tag == ECC_384_KEY_CERT))
+
+DLLEXPORT int RegisterDeviceTPM(
+    ate_client_ptr client,        // In:      pointer to the client
+    const device_id_t *deviceID,  // In:      Identifies the specific device
+    const void *certs,            // In:      certs
+    const size_t certsSize,       // In:      certs size
+    const void *pSN,              // In:      serial numbre
+    const size_t snSize,          // In:      serial numbre size
+    const DeviceLifeCycle life_cycle,  // In:      life_cycle
+    const uint8_t year,                // In:      year
+    const uint8_t week,                // In:      week
+    const uint16_t lot_num,            // In:      lot numbrt
+    const uint8_t wafer_id,            // In:      wafer id
+    const uint8_t x,                   // In:      x
+    const uint8_t y                    // In:      y
+) {
+  LOG(INFO) << "debug info: In ate dll RegisterDeviceTPM";
+  return 0;
 }
