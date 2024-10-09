@@ -4,6 +4,13 @@
 
 load("@crt//rules:pkg_win.bzl", "pkg_win")
 
+genrule(
+    name = "compile_res",
+    srcs = ["version.rc"],
+    outs = ["version.o"],
+    cmd = "i686-w64-mingw32-windres $< -O coff -o $@",
+)
+
 package(default_visibility = ["//visibility:public"])
 
 WINDOWS_LIBS = [
@@ -18,26 +25,12 @@ cc_library(
     srcs = ["ate_client.cc"],
     hdrs = ["ate_client.h"],
     defines = ["BAZEL_BUILD"],
-    linkopts = select({
-        "//:windows": WINDOWS_LIBS,
-        "//conditions:default": [],
-    }),
     deps = [
+        "@com_google_absl//absl/log:log",
+        "@com_google_absl//absl/memory",
+        "@com_github_grpc_grpc//:grpc++",
         "//src/pa/proto:pa_cc_grpc",
         "//src/transport:service_credentials",
-        "@com_github_grpc_grpc//:grpc++",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/memory",
-    ],
-)
-
-cc_test(
-    name = "ate_client_test",
-    srcs = ["ate_client_test.cc"],
-    deps = [
-        ":ate_client",
-        "//src/testing:test_helpers",
-        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -46,10 +39,11 @@ cc_binary(
     srcs = [
         "ate_api.h",
         "ate_dll.cc",
+        ":compile_res",  # Add this line
     ],
     linkopts = select({
-        "//:windows": WINDOWS_LIBS,
         "//conditions:default": [],
+        "//:windows": WINDOWS_LIBS,
     }),
     linkshared = True,
     target_compatible_with = [
@@ -58,8 +52,8 @@ cc_binary(
     deps = [
         ":ate_client",
         "//src/pa/proto:pa_cc_grpc",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/log:log",
+        "@com_google_absl//absl/status:status",
         "@com_google_absl//absl/status:statusor",
     ],
 )
@@ -70,12 +64,22 @@ cc_binary(
     defines = ["BAZEL_BUILD"],
     deps = [
         ":ate_client",
-        "//src/version",
+        "//src/version:version",
+        "@com_google_absl//absl/log:log",
+        "@com_google_absl//absl/status:status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_test(
+    name = "ate_client_test",
+    srcs = ["ate_client_test.cc"],
+    deps = [
+        ":ate_client",
+        "//src/testing:test_helpers",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
