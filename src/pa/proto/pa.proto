@@ -23,8 +23,8 @@ service ProvisioningApplianceService {
     returns (CreateKeyAndCertResponse) {}
   rpc EndorseCerts(EndorseCertsRequest)
     returns (EndorseCertsResponse) {}
-  rpc DeriveSymmetricKey(DeriveSymmetricKeyRequest)
-    returns (DeriveSymmetricKeyResponse) {}
+  rpc DeriveSymmetricKeys(DeriveSymmetricKeysRequest)
+    returns (DeriveSymmetricKeysResponse) {}
   rpc SendDeviceRegistrationPayload(RegistrationRequest)
     returns (RegistrationResponse) {}
 }
@@ -87,8 +87,7 @@ enum SymmetricKeySize {
   SYMMETRIC_KEY_SIZE_256_BITS = 2;
 }
 
-// Derive symmetric key request.
-message DeriveSymmetricKeyRequest{
+message SymmetricKeygenParams{
   // Symmetric key seed to use. Required.
   SymmetricKeySeed seed = 1;
   // Symmetric key type to generate. Required.
@@ -99,10 +98,18 @@ message DeriveSymmetricKeyRequest{
   string diversifier = 4;
 }
 
-// Derive symmetric key response.
-message DeriveSymmetricKeyResponse{
+// Derive symmetric keys request.
+message DeriveSymmetricKeysRequest{
+  // SKU identifier. Required.
+  string sku = 1;
+  // Key generation parameters. Required.
+  repeated SymmetricKeygenParams params = 2;
+}
+
+// Derive symmetric keys response.
+message DeriveSymmetricKeysResponse{
   // Key bytes. Size is provided in the request.
-  bytes key = 1;
+  repeated bytes keys = 1;
 }
 
 // Create key and endorsement certificates request.
@@ -112,9 +119,9 @@ message DeriveSymmetricKeyResponse{
 message CreateKeyAndCertRequest {
   // SKU identifier. Required.
   string sku = 1;
-  // Device identifier. Required.
+  // Device identifier. Optional.
   device_id.DeviceId device_id = 2;
-  // Serial Number per sku. Optional.
+  // Serial Number per sku. Required.
   bytes serial_number = 3;
 }
 
@@ -151,7 +158,7 @@ message InitSessionResponse {
   // PA endpoint. The client should select connections to this client to issue
   // any provisioning calls (e.g. CreateKeyAndCertRequest).
   string pa_endpoint = 2;
-  // list of authenticate methods
+  // List of authenticate methods. Required.
   repeated string auth_methods = 3;
 }
 

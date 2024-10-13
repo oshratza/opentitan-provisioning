@@ -101,15 +101,17 @@ type AuthConfig struct {
 }
 
 type Config struct {
-	Sku             string                               `yaml:"sku"`
-	SlotID          int                                  `yaml:"slotId"`
-	NumSessions     int                                  `yaml:"numSessions"`
-	WrapKeyName     string                               `yaml:"wrapKeyName"`
-	CaKeyName       string                               `yaml:"caKeyName"`
-	CertTemplate    []certloader.CertificateConfig       `yaml:"certTemplate"`
-	CertTemplateSan certloader.CertificateSubjectAltName `yaml:"certTemplateSAN"`
-	Keys            []certloader.Key                     `yaml:"keyWrapConfig"`
-	RootCaPath      string                               `yaml:"rootCAPath"`
+	Sku                string                               `yaml:"sku"`
+	SlotID             int                                  `yaml:"slotId"`
+	NumSessions        int                                  `yaml:"numSessions"`
+	WrapKeyName        string                               `yaml:"wrapKeyName"`
+	HighSecSeedKeyName string                               `yaml:"highSecSeedKeyName"`
+	LowSecSeedKeyName  string                               `yaml:"lowSecSeedKeyName"`
+	CaKeyName          string                               `yaml:"caKeyName"`
+	CertTemplate       []certloader.CertificateConfig       `yaml:"certTemplate"`
+	CertTemplateSan    certloader.CertificateSubjectAltName `yaml:"certTemplateSAN"`
+	Keys               []certloader.Key                     `yaml:"keyWrapConfig"`
+	RootCaPath         string                               `yaml:"rootCAPath"`
 }
 
 type skuState struct {
@@ -145,6 +147,7 @@ func NewSpmServer(opts Options) (pbs.SpmServiceServer, error) {
 		return nil, fmt.Errorf("config directory does not exist: %q, error: %v", opts.SPMConfigDir, err)
 	}
 
+	// TODO: make this runtime configurable
 	filename := "sku_auth.yml"
 	var config AuthConfig
 	err := utils.LoadConfig(opts.SPMConfigDir, filename, &config)
@@ -171,24 +174,19 @@ func NewSpmServer(opts Options) (pbs.SpmServiceServer, error) {
 func (s *server) initSku(sku string) (string, error) {
 	token, err := generateSessionToken(TokenSize)
 	if err != nil {
-
 		log.Printf("failed to generate session token: %v", err)
 		return "", status.Errorf(codes.NotFound, "failed to generate session token: %v", err)
 	}
-
-	if strings.HasPrefix(sku, "tpm_") {
-		log.Printf("SPM.InitSession Response - TPM Token")
-		err = s.initializeSKU(sku)
-		if err != nil {
-			log.Printf("failed to initialize sku: %v", err)
-			return "", status.Errorf(codes.Internal, "failed to initialize sku")
-		}
+	err = s.initializeSKU(sku)
+	if err != nil {
+		log.Printf("failed to initialize sku: %v", err)
+		return "", status.Errorf(codes.Internal, "failed to initialize sku")
 	}
 	return token, nil
 }
 
 // findSkuAuth returns an empty sku auth config, if nor sku or a family sku can be found
-// in the map config, otherwize the relavent sku auth config will be return.
+// in the map config, otherwise the relavent sku auth config will be return.
 func (s *server) findSkuAuth(sku string) (SkuAuthConfig, bool) {
 	skuAuthConfig := SkuAuthConfig{}
 	if skuAuthConfig, found := s.authCfg.SkuAuthCfgList[sku]; found {
@@ -271,6 +269,70 @@ func (s *server) CreateKeyAndCert(ctx context.Context, request *pbp.CreateKeyAnd
 	}, nil
 }
 
+// DeriveSymmetricKeys generates a symmetric key from a seed and diversification string.
+func (s *server) DeriveSymmetricKeys(ctx context.Context, request *pbp.DeriveSymmetricKeysRequest) (*pbp.DeriveSymmetricKeysResponse, error) {
+	// Acquire mutex before accessing SKU configuration.
+	s.muSKU.RLock()
+	defer s.muSKU.RUnlock()
+	sku, ok := s.skus[request.Sku]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound,
+			"unable to find sku %q. Try calling InitSession first", request.Sku)
+	}
+
+	// Build parameter list for all keygens requested.
+	var keygenParams []*se.SymmetricKeygenParams
+	for _, p := range request.Params {
+		params := new(se.SymmetricKeygenParams)
+
+		// Retrieve seed configuration.
+		if p.Seed == pbp.SymmetricKeySeed_SYMMETRIC_KEY_SEED_HIGH_SECURITY {
+			params.UseHighSecuritySeed = true
+		} else if p.Seed == pbp.SymmetricKeySeed_SYMMETRIC_KEY_SEED_LOW_SECURITY {
+			params.UseHighSecuritySeed = false
+		} else {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"invalid key seed requested: %d", p.Seed)
+		}
+
+		// Retrieve key size.
+		if p.Size == pbp.SymmetricKeySize_SYMMETRIC_KEY_SIZE_128_BITS {
+			params.SizeInBits = 128
+		} else if p.Size == pbp.SymmetricKeySize_SYMMETRIC_KEY_SIZE_256_BITS {
+			params.SizeInBits = 256
+		} else {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"invalid key size requested: %d", p.Size)
+		}
+
+		// Retrieve key type.
+		if p.Type == pbp.SymmetricKeyType_SYMMETRIC_KEY_TYPE_RAW {
+			params.KeyType = se.SymmetricKeyTypeRaw
+		} else if p.Type == pbp.SymmetricKeyType_SYMMETRIC_KEY_TYPE_HASHED_OT_LC_TOKEN {
+			params.KeyType = se.SymmetricKeyTypeHashedOtLcToken
+		} else {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"invalid key type requested: %d", p.Type)
+		}
+
+		// Set sku and diversifier strings.
+		params.Sku = request.Sku
+		params.Diversifier = p.Diversifier
+
+		keygenParams = append(keygenParams, params)
+	}
+
+	// Generate the symmetric keys.
+	keys, err := sku.seHandle.GenerateSymmetricKeys(keygenParams)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "could not generate symmetric key: %s", err)
+	}
+
+	return &pbp.DeriveSymmetricKeysResponse{
+		Keys: keys,
+	}, nil
+}
+
 func (s *server) initializeSKU(skuName string) error {
 	s.muSKU.Lock()
 	defer s.muSKU.Unlock()
@@ -318,6 +380,8 @@ func (s *server) initializeSKU(skuName string) error {
 		NumSessions: cfg.NumSessions,
 		KGName:      cfg.WrapKeyName,
 		KcaName:     cfg.CaKeyName,
+		KHsksName:   cfg.HighSecSeedKeyName,
+		KLsksName:   cfg.LowSecSeedKeyName,
 		HSMType:     s.hsmType,
 	})
 	if err != nil {

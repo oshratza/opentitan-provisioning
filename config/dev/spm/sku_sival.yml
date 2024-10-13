@@ -1,0 +1,11 @@
+# Copyright lowRISC contributors (OpenTitan project).
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+
+sku: "prod_a"
+slotId: 0
+numSessions: 3
+highSecSeedKeyName: "HighSecKdfSeed"
+lowSecSeedKeyName: "LowSecKdfSeed"
+caKeyName: "KCAPriv"
+rootCAPath: certs/NuvotonTPMRootCA0200.cer

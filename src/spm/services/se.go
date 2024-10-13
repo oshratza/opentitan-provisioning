@@ -29,6 +29,20 @@ type CertInfo struct {
 	WrappedKey, Iv, Cert []byte
 }
 
+const (
+	SymmetricKeyTypeRaw = iota
+	SymmetricKeyTypeHashedOtLcToken
+)
+
+// Parameters for GenerateSymmetricKeys().
+type SymmetricKeygenParams struct {
+	UseHighSecuritySeed bool
+	KeyType             uint
+	SizeInBits          uint
+	Sku                 string
+	Diversifier         string
+}
+
 // SE is an interface representing a secure element, which may be implemented
 // by various hardware modules under the hood.
 //
@@ -38,6 +52,7 @@ type SE interface {
 	// Derives the transport secret for a device with the given ID, and wraps
 	// it with the device class's global secret.
 	DeriveAndWrapTransportSecret(deviceId []byte) ([]byte, error)
+
 	// Generates and signs certificates with the given parent corresponding to the
 	// arguments in certs.
 	//
@@ -48,6 +63,15 @@ type SE interface {
 	// is returned, the returned slice will contain all certificates that were
 	// successfully generated up until that point.
 	GenerateKeyPairAndCert(caCert *x509.Certificate, params []SigningParams) ([]CertInfo, error)
+
+	// Generates symmetric keys.
+	//
+	// These keys are generated via the HKDF mechanism and may be used as:
+	//   - Wafer Authentication Secrets, or
+	//   - Lifecycle Tokens.
+	//
+	// Returns: slice of AESKey objects.
+	GenerateSymmetricKeys(params []*SymmetricKeygenParams) ([][]byte, error)
 
 	// GenerateRandom returns random data extracted from the HSM.
 	GenerateRandom(length int) ([]byte, error)

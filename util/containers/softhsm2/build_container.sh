@@ -12,4 +12,5 @@ then
     exit
 fi
 
-podman build -t ot-prov-dev -f util/containers/build/Dockerfile .
+podman build -t us-docker.pkg.dev/opentitan/opentitan-public/ot-prov-softhsm2 \
+  -f util/containers/softhsm2/Dockerfile util/containers/softhsm2
