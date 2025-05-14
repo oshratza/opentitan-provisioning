@@ -398,6 +398,43 @@ DLLEXPORT int GenerateTokens(ate_client_ptr client, const char *sku,
   return TokensCopy(count, resp, tokens, seeds);
 }
 
+DLLEXPORT int RegisterDevice(ate_client_ptr client,  const char *sku,
+                           const device_id_bytes_t *device_id) {
+  DLOG(INFO) << "RegisterDevice";
+  AteClient *ate = reinterpret_cast<AteClient *>(client);
+
+  pa::RegistrationResponse resp;
+  pa::RegistrationRequest req;
+  
+
+      req.mutable_device_data()->set_sku(sku);
+
+      auto device_id = req.mutable_device_data()->mutable_device_id();
+
+      auto hardware_origin = device_id->mutable_hardware_origin();
+      hardware_origin->set_silicon_creator_id(ot::SiliconCreatorId::SILICON_CREATOR_ID_OPENSOURCE);
+      hardware_origin->set_product_id(ot::ProductId::PRODUCT_ID_EARLGREY_Z1);
+      hardware_origin->set_device_identification_number(rand()); // Each device ID must be unique.
+      
+      device_id->set_sku_specific(std::string(16, '\0'));
+
+      req.mutable_device_data()->set_device_life_cycle(ot::DeviceLifeCycle::DEVICE_LIFE_CYCLE_PROD);
+      req.mutable_device_data()->set_wrapped_rma_unlock_token(std::string(27, '\0'));
+      req.mutable_device_data()->set_perso_tlv_data(std::string(8192, '\0'));
+ 
+ 
+  // run the service
+  auto status = ate->RegisterDevice(req, &resp);
+  if (!status.ok()) {
+    LOG(ERROR) << "RegisterDevice failed with " << status.error_code() << ": "
+               << status.error_message();
+    return static_cast<int>(status.error_code());
+  }
+
+
+  return 0;
+}
+
 DLLEXPORT int EndorseCerts(ate_client_ptr client, const char *sku,
                            const device_id_bytes_t *device_id,
                            const endorse_cert_signature_t *signature,

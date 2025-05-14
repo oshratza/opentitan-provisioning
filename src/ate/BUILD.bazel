@@ -70,6 +70,7 @@ pkg_win(
     name = "windows",
     srcs = [
         ":ate",
+        "ate_api.h",
     ],
     platform = "@crt//platforms/x86_32:win32",
 )

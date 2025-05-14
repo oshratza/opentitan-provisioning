@@ -353,6 +353,12 @@ DLLEXPORT int EndorseCerts(ate_client_ptr client, const char* sku,
                            const endorse_cert_request_t* request,
                            endorse_cert_response_t* certs);
 
+/**
+ * TBD take description from OT-provisioing repo
+ */
+ DLLEXPORT int RegisterDevice(ate_client_ptr client,  const char *sku,
+                           const device_id_bytes_t *device_id);
+
 #ifdef __cplusplus
 }
 #endif
