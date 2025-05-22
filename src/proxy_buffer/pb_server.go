@@ -17,15 +17,27 @@ import (
 	"google.golang.org/grpc"
 
 	pbp "github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/proto/proxy_buffer_go_pb"
+	"github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/services/httpregistry"
 	"github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/services/proxybuffer"
 	"github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/store/db"
 	"github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/store/filedb"
+	"github.com/lowRISC/opentitan-provisioning/src/proxy_buffer/syncer"
 	"github.com/lowRISC/opentitan-provisioning/src/transport/grpconn"
 )
 
 var (
-	port        = flag.Int("port", 0, "the port to bind the server on; required")
-	dbPath      = flag.String("db_path", "", "the path to the database file")
+	// Database
+	port   = flag.Int("port", 0, "the port to bind the server on; required")
+	dbPath = flag.String("db_path", "", "the path to the database file")
+	// Registry client
+	registerDeviceURL      = flag.String("register_device_url", "", "URL to call for RegisterDevice")
+	batchRegisterDeviceURL = flag.String("batch_register_device_url", "", "URL to call for BatchRegisterDevice")
+	registryHeadersFile    = flag.String("registry_headers_file", "", "File containing all the headers. Each line should contain a header in the format `NAME: VALUE`.")
+	// Syncer
+	enableSyncer        = flag.Bool("enable_syncer", false, "If true, will create an HTTP register and a syncer.")
+	syncerFrequency     = flag.String("syncer_frequency", "10m", "Frequency with which the syncer runs. Must use a valid Go duration string (see https://pkg.go.dev/time#ParseDuration). Defaults to 10 minutes.")
+	syncerRecordsPerRun = flag.Int("syncer_records_per_run", 100, "Number of records for the syncer to process per run. Defaults to 100.")
+	// gRPC server
 	enableTLS   = flag.Bool("enable_tls", false, "Enable mTLS secure channel; optional")
 	serviceKey  = flag.String("service_key", "", "File path to the PEM encoding of the server's private key")
 	serviceCert = flag.String("service_cert", "", "File path to the PEM encoding of the server's certificate chain")
@@ -44,6 +56,29 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	database := db.New(conn)
+
+	if *enableSyncer {
+		// Initialize the registry client
+		registry, err := httpregistry.New(&httpregistry.RegistryConfig{
+			RegisterDeviceURL:      *registerDeviceURL,
+			BatchRegisterDeviceURL: *batchRegisterDeviceURL,
+			HeadersFilepath:        *registryHeadersFile,
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize registry client: %v", err)
+		}
+
+		// Initialize syncer job
+		syncerOpts := &syncer.Options{
+			Frequency:     *syncerFrequency,
+			RecordsPerRun: *syncerRecordsPerRun,
+		}
+		syncerJob, err := syncer.New(database, registry, syncerOpts)
+		if err != nil {
+			log.Fatalf("Failed to initialize syncer job: %v", err)
+		}
+		syncerJob.Start()
+	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
