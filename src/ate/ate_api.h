@@ -92,6 +92,13 @@ typedef struct diversifier_bytes {
 } diversifier_bytes_t;
 
 /**
+ * Type used to wrap device_id raw bytes.
+ */
+typedef struct device_id_bytes {
+  uint8_t raw[32];
+} device_id_bytes_t;
+
+/**
  * Hash types supported by the provisioning service.
  */
 typedef enum hash_type {
