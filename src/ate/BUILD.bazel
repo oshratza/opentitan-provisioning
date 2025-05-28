@@ -22,6 +22,9 @@ cc_library(
         "//:windows": WINDOWS_LIBS,
         "//conditions:default": [],
     }),
+    copts = [
+        "-Wno-switch-default",
+    ],
     deps = [
         "//src/pa/proto:pa_cc_grpc",
         "//src/transport:service_credentials",
@@ -90,6 +93,9 @@ cc_binary(
     target_compatible_with = [
         "@platforms//os:windows",
     ],
+    copts = [
+        "-Wno-switch-default",
+    ],
     deps = [
         ":ate_client",
         "//src/ate/proto:dut_commands_cc_proto",
@@ -106,6 +112,7 @@ pkg_win(
     name = "windows",
     srcs = [
         ":ate",
+        "ate_api.h",
     ],
     platform = "@crt//platforms/x86_32:win32",
 )
