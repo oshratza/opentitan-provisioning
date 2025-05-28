@@ -7,6 +7,7 @@ package pa
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -108,10 +109,15 @@ func (s *server) CloseSession(ctx context.Context, request *pap.CloseSessionRequ
 func (s *server) EndorseCerts(ctx context.Context, request *pap.EndorseCertsRequest) (*pap.EndorseCertsResponse, error) {
 	log.Printf("In PA - Received EndorseCerts request with Sku=%s", request.Sku)
 
+	log.Printf("xxxxxxxxxxx EndorseCerts request=%s\n\n", request)
+	log.Printf("xxxxxxxxxxx EndorseCerts request.diversifier=%s\n\n", hex.EncodeToString(request.Diversifier))
+
 	r, err := s.spmClient.EndorseCerts(ctx, request)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "SPM returned error: %v", err)
 	}
+	log.Printf("yyyyyyyyyyyyyyyyyyyyyy EndorseCerts EndorseCertsResponse.Certs=%s\n\n\n\n", r.Certs)
+
 	return r, nil
 }
 

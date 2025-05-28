@@ -27,6 +27,13 @@ using provisioning::ate::AteClient;
 using namespace provisioning::ate;
 }  // namespace
 
+// Get the time in milliseconds
+uint64_t getMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::high_resolution_clock::now().time_since_epoch())
+      .count();
+}
+
 std::string extractDNSNameFromCert(const char *certPath) {
   DLOG(INFO) << "extractDNSNameFromCert";
   FILE *certFile = fopen(certPath, "r");
@@ -397,6 +404,74 @@ DLLEXPORT int GenerateTokens(ate_client_ptr client, const char *sku,
   }
 
   return TokensCopy(count, resp, tokens, seeds);
+}
+
+DLLEXPORT int RegisterDevice(ate_client_ptr client,  const char *sku,
+                           const device_id_t *device_id,
+                           DeviceLifeCycle device_life_cycle,
+                           meta_data_t* metadata,
+                           int wrapped_rma_size,
+                           uint8_t* wrapped_rma_unlock_token,
+                           int perso_tlv_size,
+                           uint8_t* perso_tlv_data
+                          ) {
+  DLOG(INFO) << "RegisterDevice";
+
+  AteClient *ate = reinterpret_cast<AteClient *>(client);
+
+  // fill the request.device_data
+  pa::RegistrationRequest req;
+  auto device_data = req.mutable_device_data();
+
+  //sku
+  device_data->set_sku(sku);
+
+  //DeviceId
+  auto hardware_origin = device_data->mutable_device_id()->mutable_hardware_origin();
+  hardware_origin->set_silicon_creator_id(static_cast<ot::SiliconCreatorId>(device_id->hardware_origin.silicon_creator_id));
+  hardware_origin->set_product_id(static_cast<ot::ProductId>(device_id->hardware_origin.product_id));
+  hardware_origin->set_device_identification_number(device_id->hardware_origin.device_identification_number);
+  device_data->mutable_device_id()->set_sku_specific(
+      std::string(reinterpret_cast<const char *>(device_id->sku_specific),
+                  sizeof(device_id->sku_specific)));
+
+  //DeviceLifeCycle
+  device_data->set_device_life_cycle(static_cast<ot::DeviceLifeCycle>(device_life_cycle));
+
+  //Metadata
+  auto milliseconds = getMilliseconds();
+  device_data->mutable_metadata()->set_registration_state(
+      ot::DeviceRegistrationState::DEVICE_REGISTRATION_STATE_PROVISIONED);
+  device_data->mutable_metadata()->set_create_time_ms(
+      milliseconds);
+  device_data->mutable_metadata()->set_update_time_ms(
+      milliseconds);
+  device_data->mutable_metadata()->set_ate_id(ate->ate_id);
+  device_data->mutable_metadata()->set_ate_raw("");
+  device_data->mutable_metadata()->set_year(metadata->year);
+  device_data->mutable_metadata()->set_week(metadata->week);
+  device_data->mutable_metadata()->set_lot_num(metadata->lot_num);
+  device_data->mutable_metadata()->set_wafer_id(metadata->wafer_id);
+  device_data->mutable_metadata()->set_x(metadata->x); 
+  device_data->mutable_metadata()->set_y(metadata->y);
+
+  //wrapped_rma_unlock_token
+  device_data->set_wrapped_rma_unlock_token(
+    std::string((uint8_t *)wrapped_rma_unlock_token, (uint8_t *)wrapped_rma_unlock_token + wrapped_rma_size));
+
+  //perso_fw_sha256_hash
+  device_data->set_perso_tlv_data(
+    std::string((uint8_t *)perso_tlv_data, (uint8_t *)perso_tlv_data + perso_tlv_size));
+ 
+  // run the service
+  pa::RegistrationResponse resp;
+  auto status = ate->RegisterDevice(req, &resp);
+  if (!status.ok()) {
+    LOG(ERROR) << "RegisterDevice failed with " << status.error_code() << ": "
+               << status.error_message();
+    return static_cast<int>(status.error_code());
+  }
+  return 0;
 }
 
 DLLEXPORT int EndorseCerts(ate_client_ptr client, const char *sku,
