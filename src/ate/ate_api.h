@@ -155,7 +155,8 @@ typedef struct DeviceId {
   uint8_t sku_specific[kSkuSpecificSize];
 } device_id_t;
 #pragma pack(pop)
-static_assert(sizeof(device_id_t) == kDeviceIdSize, "device_id_t must be 32 bytes long");
+static_assert(sizeof(device_id_t) == kDeviceIdSize,
+              "device_id_t must be 32 bytes long");
 
 typedef struct device_id_bytes {
   /**
