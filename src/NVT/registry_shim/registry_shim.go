@@ -19,6 +19,7 @@ import (
 	papb "github.com/lowRISC/opentitan-provisioning/src/pa/proto/pa_go_pb"
 	di "github.com/lowRISC/opentitan-provisioning/src/proto/device_id_go_pb"
 	diu "github.com/lowRISC/opentitan-provisioning/src/proto/device_id_utils"
+	rrpb "github.com/lowRISC/opentitan-provisioning/src/proto/registry_record_go_pb"
 	nvt_di "github.com/lowRISC/opentitan-provisioning/src/registry_buffer/proto/device_id_go_pb"
 	pbr "github.com/lowRISC/opentitan-provisioning/src/registry_buffer/proto/registry_buffer_go_pb"
 	spmpb "github.com/lowRISC/opentitan-provisioning/src/spm/proto/spm_go_pb"
@@ -49,16 +50,37 @@ func StartRegistryBuffer(registryBufferAddress string, enableTLS bool, caRootCer
 	return nil
 }
 
-// Vendor-specific implementation of RegisterDevice call goes here.
-func RegisterDevice(ctx context.Context, spmClient spmpb.SpmServiceClient, request *papb.RegistrationRequest) (*papb.RegistrationResponse, error) {
+// Vendor-specific implementation of RegisterDevice
+func RegisterDevice(ctx context.Context, request *papb.RegistrationRequest, endorsement *spmpb.EndorseDataResponse) (*papb.RegistrationResponse, error) {
 	log.Printf("In Registry Shim - Received RegisterDevice request with DeviceID: %v", diu.DeviceIdToHexString(request.DeviceData.DeviceId))
 
-	// Translate/embed di.DeviceData to the registry request.
-	// request = example() //@@ temporary for testing
-	rbRequest, err := ConvertPaToRegistryBuffer(request)
+	// Check if regitry client is valid.
+	if registryClient == nil {
+		return nil, status.Errorf(codes.Internal, "RegisterDevice ended with error, PA started without ProxyBuffer")
+	}
+
+	// Extract ot.DeviceData to a raw byte buffer.
+	deviceDataBytes, err := proto.Marshal(request.DeviceData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal device data: %v", err)
+	}
+
+	// Translate/embed ot.DeviceData to ot.RegistryRecord
+	Record := rrpb.RegistryRecord{
+		DeviceId:      diu.DeviceIdToHexString(request.DeviceData.DeviceId),
+		Sku:           request.DeviceData.Sku,
+		Version:       0,
+		Data:          deviceDataBytes,
+		AuthPubkey:    endorsement.Pubkey,
+		AuthSignature: endorsement.Signature,
+	}
+
+	// Translate/embed ot.RegistryRecord to the registry request.
+	rbRequest, err := ConvertPaToRegistryBuffer(request, &Record)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "RegisterDevice returned error: %v", err)
 	}
+
 	// Send record to the registry_buffer (the buffering front end of the registry service).
 	_, err = registryClient.RegisterDevice(ctx, rbRequest)
 	if err != nil {
@@ -68,17 +90,17 @@ func RegisterDevice(ctx context.Context, spmClient spmpb.SpmServiceClient, reque
 	return &papb.RegistrationResponse{}, nil
 }
 
-// Converts pa.RegistrationRequest to pbr.RegistrationRequest (= message type expected by Nuvoton's registry_buffer)
-func ConvertPaToRegistryBuffer(paReq *papb.RegistrationRequest) (*pbr.RegistrationRequest, error) {
-	deviceData := paReq.DeviceData
+// Converts rrpb.RegistryRecord to pbr.RegistrationRequest (= message type expected by Nuvoton's registry_buffer)
+func ConvertPaToRegistryBuffer(request *papb.RegistrationRequest, otRecord *rrpb.RegistryRecord) (*pbr.RegistrationRequest, error) {
+	deviceData := request.DeviceData
 
 	// Extract ot.DeviceData to a raw byte buffer.
-	deviceDataBytes, err := proto.Marshal(deviceData)
+	otRecordBytes, err := proto.Marshal(otRecord)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal device data: %v", err)
+		return nil, fmt.Errorf("failed to marshal registry record data: %v", err)
 	}
 
-	// Convert di.DeviceData to nvt_di.DeviceRecord
+	// convert ot.RegistryRecord to nvt_di.DeviceRecord
 	deviceRecord := nvt_di.DeviceRecord{
 		Sku: deviceData.Sku,
 		Id: &nvt_di.DeviceId{
@@ -96,7 +118,7 @@ func ConvertPaToRegistryBuffer(paReq *papb.RegistrationRequest) (*pbr.Registrati
 			DeviceIdPub: []*nvt_di.DeviceIdPub{
 				{
 					Format: nvt_di.DeviceIdPubFormat_DEVICE_ID_PUB_FORMAT_DER,
-					Blob:   deviceDataBytes, // store the entire paReq
+					Blob:   otRecordBytes, // store the entire ot.RegistryRecord
 				},
 			},
 			Payload:         nil, // legacy field, ignored
