@@ -13,6 +13,7 @@
 
 namespace {
 
+// Helper function to extract a certificate from a perso blob.
 int ExtractCertObject(const uint8_t* buf, size_t buf_size,
                       perso_tlv_cert_obj_t* cert_obj) {
   if (buf == nullptr || cert_obj == nullptr) {
@@ -37,8 +38,10 @@ int ExtractCertObject(const uint8_t* buf, size_t buf_size,
 
   uint16_t obj_type;
   PERSO_TLV_GET_FIELD(Objh, Type, *objh, &obj_type);
-  if (obj_type != kPersoObjectTypeX509Tbs) {
-    LOG(ERROR) << "Invalid object type: " << obj_type << ", expected X509 TBS";
+  if (obj_type != kPersoObjectTypeX509Tbs &&
+      obj_type != kPersoObjectTypeX509Cert) {
+    LOG(ERROR) << "Invalid object type: " << obj_type
+               << ", expected X509 TBS or (full) cert";
     return -1;
   }
 
@@ -86,7 +89,75 @@ int ExtractCertObject(const uint8_t* buf, size_t buf_size,
   return 0;
 }
 
-// Helper function to extract device ID from a perso blob
+// Helper function to extract a TBS certificate from a perso blob.
+int PackX509TbsCertStruct(const perso_tlv_cert_obj_t* cert_obj,
+                          endorse_cert_request_t* tbs_cert) {
+  if (cert_obj == nullptr || tbs_cert == nullptr) {
+    LOG(ERROR) << "Invalid cert_obj or tbs_cert object pointer.";
+    return -1;
+  }
+
+  // Copy the certificate body.
+  if (cert_obj->cert_body_size > kCertificateMaxSize) {
+    LOG(ERROR) << "TBS certificate body size exceeds maximum: "
+               << cert_obj->cert_body_size << " > " << kCertificateMaxSize;
+    return -1;
+  }
+  memset(tbs_cert->tbs, 0, sizeof(tbs_cert->tbs));
+  memcpy(tbs_cert->tbs, cert_obj->cert_body_p, cert_obj->cert_body_size);
+  tbs_cert->tbs_size = cert_obj->cert_body_size;
+
+  // Copy the key label.
+  size_t key_label_size = strlen(cert_obj->name);
+  if (key_label_size > kCertificateKeyLabelMaxSize) {
+    LOG(ERROR) << "Key label size exceeds maximum: " << key_label_size << " > "
+               << kCertificateKeyLabelMaxSize;
+    return -1;
+  }
+  memset(tbs_cert->key_label, 0, sizeof(tbs_cert->key_label));
+  memcpy(tbs_cert->key_label, cert_obj->name, key_label_size);
+  tbs_cert->key_label_size = key_label_size;
+
+  tbs_cert->hash_type = kHashTypeSha256;
+  tbs_cert->curve_type = kCurveTypeP256;
+  tbs_cert->signature_encoding = kSignatureEncodingDer;
+
+  return 0;
+}
+
+// Helper function to extract a (fully formed) certificate from a perso blob.
+int PackX509CertStruct(const perso_tlv_cert_obj_t* cert_obj,
+                       endorse_cert_response_t* cert) {
+  if (cert_obj == nullptr || cert == nullptr) {
+    LOG(ERROR) << "Invalid cert_obj or cert object pointer.";
+    return -1;
+  }
+
+  // Copy the certificate body.
+  if (cert_obj->cert_body_size > kCertificateMaxSize) {
+    LOG(ERROR) << "Certificate body size exceeds maximum: "
+               << cert_obj->cert_body_size << " > " << kCertificateMaxSize;
+    return -1;
+  }
+  memset(cert->cert, 0, sizeof(cert->cert));
+  memcpy(cert->cert, cert_obj->cert_body_p, cert_obj->cert_body_size);
+  cert->cert_size = cert_obj->cert_body_size;
+
+  // Copy the key label.
+  size_t key_label_size = strlen(cert_obj->name);
+  if (key_label_size > kCertificateKeyLabelMaxSize) {
+    LOG(ERROR) << "Key label size exceeds maximum: " << key_label_size << " > "
+               << kCertificateKeyLabelMaxSize;
+    return -1;
+  }
+  memset(cert->key_label, 0, sizeof(cert->key_label));
+  memcpy(cert->key_label, cert_obj->name, key_label_size);
+  cert->key_label_size = key_label_size;
+
+  return 0;
+}
+
+// Helper function to extract a device ID from a perso blob.
 int ExtractDeviceId(const uint8_t* buf, size_t buf_size,
                     device_id_bytes_t* device_id) {
   enum {
@@ -128,21 +199,92 @@ int ExtractDeviceId(const uint8_t* buf, size_t buf_size,
              << ", expected: " << kPersoObjectTypeDeviceId;
   return -1;
 }
+
+// Helper function to pack a certificate object into a perso blob.
+int PackX509CertTlvObject(const endorse_cert_response_t* cert,
+                          perso_blob_t* blob) {
+  // Calculate the size of the object header and certificate header.
+  size_t cert_entry_size =
+      sizeof(perso_tlv_cert_header_t) + cert->key_label_size + cert->cert_size;
+  size_t obj_size = sizeof(perso_tlv_object_header_t) + cert_entry_size;
+
+  if (blob->next_free + obj_size > sizeof(blob->body)) {
+    LOG(ERROR) << "Personalization blob is full, cannot add more objects.";
+    return -1;
+  }
+
+  // Set up the object header.
+  uint8_t* buf = blob->body + blob->next_free;
+  perso_tlv_object_header_t* obj_hdr =
+      reinterpret_cast<perso_tlv_object_header_t*>(buf);
+  PERSO_TLV_SET_FIELD(Objh, Size, *obj_hdr, obj_size);
+  PERSO_TLV_SET_FIELD(Objh, Type, *obj_hdr, kPersoObjectTypeX509Cert);
+
+  // Set up the certificate header.
+  buf += sizeof(perso_tlv_object_header_t);
+  perso_tlv_cert_header_t* cert_hdr =
+      reinterpret_cast<perso_tlv_cert_header_t*>(buf);
+  PERSO_TLV_SET_FIELD(Crth, Size, *cert_hdr, cert_entry_size);
+  PERSO_TLV_SET_FIELD(Crth, NameSize, *cert_hdr, cert->key_label_size);
+
+  // Copy the certificate name string.
+  buf += sizeof(perso_tlv_cert_header_t);
+  memcpy(buf, cert->key_label, cert->key_label_size);
+
+  // Copy the certificate data.
+  buf += cert->key_label_size;
+  memcpy(buf, cert->cert, cert->cert_size);
+
+  // Update the next free offset in the blob.
+  blob->next_free += obj_size;
+  blob->num_objects++;
+
+  return 0;
+}
+
+// Helper function to pack a dev_seed object into a perso blob.
+int PackDevSeedTlvObject(const dev_seed_t* dev_seed, perso_blob_t* blob) {
+  // Calculate the size of the object .
+  size_t obj_size = sizeof(perso_tlv_object_header_t) + dev_seed->size;
+  if (blob->next_free + obj_size > sizeof(blob->body)) {
+    LOG(ERROR) << "Personalization blob is full, cannot add more objects.";
+    return -1;
+  }
+
+  // Set up the object header.
+  uint8_t* buf = blob->body + blob->next_free;
+  perso_tlv_object_header_t* obj_hdr =
+      reinterpret_cast<perso_tlv_object_header_t*>(buf);
+  PERSO_TLV_SET_FIELD(Objh, Size, *obj_hdr, obj_size);
+  PERSO_TLV_SET_FIELD(Objh, Type, *obj_hdr, kPersoObjectTypeDevSeed);
+
+  // Copy the certificate data.
+  buf += sizeof(perso_tlv_object_header_t);
+  memcpy(buf, dev_seed->raw, dev_seed->size);
+
+  // Update the next free offset in the blob.
+  blob->next_free += obj_size;
+  blob->num_objects++;
+
+  return 0;
+}
+
 }  // namespace
 
-DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
-                              device_id_bytes_t* device_id,
-                              endorse_cert_signature_t* signature,
-                              size_t* cert_count,
-                              endorse_cert_request_t* request,
-                              device_dev_seed_t* seeds, size_t* seed_count) {
-  if (device_id == nullptr || signature == nullptr || cert_count == nullptr ||
-      request == nullptr || seeds == nullptr || seed_count == nullptr) {
+DLLEXPORT int UnpackPersoBlob(
+    const perso_blob_t* blob, device_id_bytes_t* device_id,
+    endorse_cert_signature_t* signature, endorse_cert_request_t* x509_tbs_certs,
+    size_t* tbs_cert_count, endorse_cert_response_t* x509_certs,
+    size_t* cert_count, dev_seed_t* dev_seeds, size_t* dev_seed_count) {
+  if (device_id == nullptr || signature == nullptr ||
+      x509_tbs_certs == nullptr || tbs_cert_count == nullptr ||
+      x509_certs == nullptr || cert_count == nullptr || dev_seeds == nullptr ||
+      dev_seed_count == nullptr) {
     LOG(ERROR) << "Invalid output parameters";
     return -1;
   }
 
-  if (blob == nullptr || blob->body == nullptr || blob->next_free == 0) {
+  if (blob == nullptr || blob->next_free == 0) {
     LOG(ERROR) << "Invalid personalization blob";
     return -1;  // Invalid blob
   }
@@ -150,10 +292,12 @@ DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
   memset(device_id->raw, 0, sizeof(device_id_bytes_t));
   memset(signature->raw, 0, sizeof(signature->raw));
 
+  size_t max_tbs_cert_count = *tbs_cert_count;
+  *tbs_cert_count = 0;
   size_t max_cert_count = *cert_count;
   *cert_count = 0;
-  size_t max_seed_count = *seed_count;
-  *seed_count = 0;
+  size_t max_dev_seed_count = *dev_seed_count;
+  *dev_seed_count = 0;
 
   const uint8_t* buf = blob->body;
   size_t remaining = blob->next_free;
@@ -187,45 +331,42 @@ DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
         }
         break;
       }
+
       case kPersoObjectTypeX509Tbs: {
-        if (*cert_count >= max_cert_count) {
+        if (*tbs_cert_count >= max_tbs_cert_count) {
           LOG(ERROR) << "Exceeded maximum number of TBS certificates: "
-                     << *cert_count << " >= " << max_cert_count;
+                     << *tbs_cert_count << " >= " << max_tbs_cert_count;
           return -1;
         }
-
         perso_tlv_cert_obj_t cert_obj;
         if (ExtractCertObject(buf, obj_size, &cert_obj) != 0) {
           LOG(ERROR) << "Failed to extract X509 TBS certificate object";
           return -1;
         }
-
-        // Copy the certificate body.
-        if (cert_obj.cert_body_size > kCertificateMaxSize) {
-          LOG(ERROR) << "TBS certificate body size exceeds maximum: "
-                     << cert_obj.cert_body_size << " > " << kCertificateMaxSize;
+        if (PackX509TbsCertStruct(&cert_obj,
+                                  &x509_tbs_certs[*tbs_cert_count]) != 0) {
+          LOG(ERROR) << "Failed to pack TBS certificate endorsement request.";
           return -1;
         }
-        memset(request[*cert_count].tbs, 0, sizeof(request[*cert_count].tbs));
-        memcpy(request[*cert_count].tbs, cert_obj.cert_body_p,
-               cert_obj.cert_body_size);
-        request[*cert_count].tbs_size = cert_obj.cert_body_size;
+        (*tbs_cert_count)++;
+        break;
+      }
 
-        // Copy the key label.
-        size_t key_label_size = strlen(cert_obj.name);
-        if (key_label_size > kCertificateKeyLabelMaxSize) {
-          LOG(ERROR) << "Key label size exceeds maximum: " << key_label_size
-                     << " > " << kCertificateKeyLabelMaxSize;
+      case kPersoObjectTypeX509Cert: {
+        if (*cert_count >= max_cert_count) {
+          LOG(ERROR) << "Exceeded maximum number of certificates: "
+                     << *cert_count << " >= " << max_cert_count;
           return -1;
         }
-        memset(request[*cert_count].key_label, 0,
-               sizeof(request[*cert_count].key_label));
-        memcpy(request[*cert_count].key_label, cert_obj.name, key_label_size);
-        request[*cert_count].key_label_size = key_label_size;
-
-        request[*cert_count].hash_type = kHashTypeSha256;
-        request[*cert_count].curve_type = kCurveTypeP256;
-        request[*cert_count].signature_encoding = kSignatureEncodingDer;
+        perso_tlv_cert_obj_t cert_obj;
+        if (ExtractCertObject(buf, obj_size, &cert_obj) != 0) {
+          LOG(ERROR) << "Failed to extract X509 certificate object";
+          return -1;
+        }
+        if (PackX509CertStruct(&cert_obj, &x509_certs[*cert_count]) != 0) {
+          LOG(ERROR) << "Failed to pack TBS certificate endorsement request.";
+          return -1;
+        }
         (*cert_count)++;
         break;
       }
@@ -245,25 +386,23 @@ DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
       }
 
       case kPersoObjectTypeDevSeed: {
-        if (*seed_count >= max_seed_count) {
-          LOG(ERROR) << "Exceeded maximum number of device seeds: "
-                     << *seed_count << " >= " << max_seed_count;
+        if (*dev_seed_count >= max_dev_seed_count) {
+          LOG(ERROR) << "Exceeded maximum number of dev seeds: "
+                     << *dev_seed_count << " >= " << max_dev_seed_count;
           return -1;
         }
-        if (obj_size >
-            kDeviceDevSeedBytesSize + sizeof(perso_tlv_object_header_t)) {
+        if (obj_size > kDevSeedBytesSize + sizeof(perso_tlv_object_header_t)) {
           LOG(ERROR) << "Invalid device seed object size: " << obj_size
                      << ", expected: "
-                     << (kDeviceDevSeedBytesSize +
-                         sizeof(perso_tlv_object_header_t));
+                     << (kDevSeedBytesSize + sizeof(perso_tlv_object_header_t));
           return -1;
         }
-
-        seeds[*seed_count].size = obj_size - sizeof(perso_tlv_object_header_t);
-        memcpy(seeds[*seed_count].raw, buf + sizeof(perso_tlv_object_header_t),
-               seeds[*seed_count].size);
-
-        (*seed_count)++;
+        dev_seeds[*dev_seed_count].size =
+            obj_size - sizeof(perso_tlv_object_header_t);
+        memcpy(dev_seeds[*dev_seed_count].raw,
+               buf + sizeof(perso_tlv_object_header_t),
+               dev_seeds[*dev_seed_count].size);
+        (*dev_seed_count)++;
         break;
       }
     }
@@ -276,7 +415,7 @@ DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
     LOG(ERROR) << "No WAS TBS HMAC found in the blob";
     return -1;
   }
-  if (*cert_count == 0) {
+  if (*tbs_cert_count == 0) {
     LOG(ERROR) << "No TBS certificates found in the blob";
     return -1;
   }
@@ -312,42 +451,63 @@ DLLEXPORT int PackPersoBlob(size_t cert_count,
       LOG(ERROR) << "Invalid certificate at index " << i;
       return -1;
     }
-
-    // Calculate the size of the object header and certificate header.
-    size_t cert_entry_size =
-        sizeof(perso_tlv_cert_header_t) + cert.key_label_size + cert.cert_size;
-    size_t obj_size = sizeof(perso_tlv_object_header_t) + cert_entry_size;
-
-    if (blob->next_free + obj_size > sizeof(blob->body)) {
-      LOG(ERROR) << "Personalization blob is full, cannot add more objects";
+    if (PackX509CertTlvObject(&cert, blob) != 0) {
+      LOG(ERROR) << "Unable to pack certificate into perso blob.";
       return -1;
     }
-
-    // Set up the object header.
-    uint8_t* buf = blob->body + blob->next_free;
-    perso_tlv_object_header_t* obj_hdr =
-        reinterpret_cast<perso_tlv_object_header_t*>(buf);
-    PERSO_TLV_SET_FIELD(Objh, Size, *obj_hdr, obj_size);
-    PERSO_TLV_SET_FIELD(Objh, Type, *obj_hdr, kPersoObjectTypeX509Cert);
-
-    // Set up the certificate header.
-    buf += sizeof(perso_tlv_object_header_t);
-    perso_tlv_cert_header_t* cert_hdr =
-        reinterpret_cast<perso_tlv_cert_header_t*>(buf);
-    PERSO_TLV_SET_FIELD(Crth, Size, *cert_hdr, cert_entry_size);
-    PERSO_TLV_SET_FIELD(Crth, NameSize, *cert_hdr, cert.key_label_size);
-
-    // Copy the name and certificate data.
-    buf += sizeof(perso_tlv_cert_header_t);
-    memcpy(buf, cert.key_label, cert.key_label_size);
-
-    // Copy the certificate data.
-    buf += cert.key_label_size;
-    memcpy(buf, cert.cert, cert.cert_size);
-
-    // Update the next free offset in the blob.
-    blob->next_free += obj_size;
-    blob->num_objects++;
   }
+  return 0;
+}
+
+DLLEXPORT int PackRegistryPersoTlvData(
+    const endorse_cert_response_t* certs_endorsed_by_dut,
+    size_t num_certs_endorsed_by_dut,
+    const endorse_cert_response_t* certs_endorsed_by_spm,
+    size_t num_certs_endorsed_by_spm, const dev_seed_t* dev_seeds,
+    size_t num_dev_seeds, perso_blob_t* output) {
+  if (certs_endorsed_by_dut == nullptr || certs_endorsed_by_spm == nullptr ||
+      output == nullptr) {
+    LOG(ERROR) << "Invalid certs or personalization blob pointer.";
+    return -1;
+  }
+  if (num_certs_endorsed_by_dut == 0 && num_certs_endorsed_by_spm == 0 &&
+      num_dev_seeds == 0) {
+    LOG(ERROR) << "No certs or seeds to send to registry.";
+    return -1;
+  }
+
+  memset(output, 0, sizeof(perso_blob_t));
+
+  // Pack all cert objects.
+  const endorse_cert_response_t* all_certs[] = {certs_endorsed_by_dut,
+                                                certs_endorsed_by_spm};
+  size_t num_certs[] = {num_certs_endorsed_by_dut, num_certs_endorsed_by_spm};
+  for (size_t i = 0; i < (sizeof(all_certs) / sizeof(all_certs[0])); i++) {
+    for (size_t j = 0; j < num_certs[i]; j++) {
+      const endorse_cert_response_t& cert = all_certs[i][j];
+      if (cert.cert_size == 0) {
+        LOG(ERROR) << "Invalid certificate at indices i:" << i << ", j:" << j;
+        return -1;
+      }
+      if (PackX509CertTlvObject(&cert, output) != 0) {
+        LOG(ERROR) << "Unable to pack certificate into perso blob.";
+        return -1;
+      }
+    }
+  }
+
+  // Pack all dev seed objects.
+  for (size_t i = 0; i < num_dev_seeds; i++) {
+    const dev_seed_t& dev_seed = dev_seeds[i];
+    if (dev_seed.size == 0) {
+      LOG(ERROR) << "Invalid dev_seed at index " << i;
+      return -1;
+    }
+    if (PackDevSeedTlvObject(&dev_seed, output) != 0) {
+      LOG(ERROR) << "Unable to pack dev seed into perso blob.";
+      return -1;
+    }
+  }
+
   return 0;
 }

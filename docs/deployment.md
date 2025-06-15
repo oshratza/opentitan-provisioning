@@ -49,6 +49,21 @@ installation directory (e.g., `/opt/opentitan-prov`).
     release_bundle.tar.xz
     softhsm_dev.tar.xz
     ```
+    > Note: Releases are available in GitHub: 
+    > https://github.com/lowRISC/opentitan-provisioning/releases
+    > 
+    > The release packages can be built using the following Bazel
+    > Commands. Use the `prod` configuration when targeting production
+    > deployments.
+    >
+    > ```
+    >  # Can be set to `dev` or `prod`.
+    >  export DEPLOY_ENV=prod
+    >  bazelisk build //release:release_bundle --define "env=${DEPLOY_ENV}"
+    >  bazelisk build //release:fakeregistry_containers_tar
+    >  bazelisk build //release:provisioning_appliance_containers_tar
+    >  bazelisk build //release:proxybuffer_containers_tar
+    > ```
 
 2. Prepare the deployment directories and copy the release artifacts. All
    services will be installed under the `${OPENTITAN_VAR_DIR}` directory.
@@ -72,7 +87,23 @@ installation directory (e.g., `/opt/opentitan-prov`).
     $ sudo tar xvf ${OPENTITAN_VAR_DIR}/config/config.tar.gz -C ${OPENTITAN_VAR_DIR}
     ```
 
-4. Run the deployment script. The script takes the deployment environment as an
+4. Update the production environment variables to match your deployment configuration.
+   The file will be located in the configuration target:
+
+   ```
+   # Production environment.
+   ${OPENTITAN_VAR_DIR}/config/env/spm.env
+   ${OPENTITAN_VAR_DIR}/config/env/spm.yml
+
+   # Development environment.
+   ${OPENTITAN_VAR_DIR}/config/env/spm.env
+   ${OPENTITAN_VAR_DIR}/config/env/spm.yml
+   ```
+
+   The `spm.yml` may be deleted if opting for providing the HSM pin via other means.
+   Make sure only the SPM user has access to the configuration files.
+
+5. Run the deployment script. The script takes the deployment environment as an
    argument. This can be `prod` or `dev`.
 
     ```console
@@ -88,7 +119,7 @@ installation directory (e.g., `/opt/opentitan-prov`).
     a198c59630f13987fbd2fbfe37593920adb5b26f7c0b6c987e6a9a441af1109b
     ```
 
-5. Configure a `systemctl` service to restart the service on system reboot:
+6. Configure a `systemctl` service to restart the service on system reboot:
 
     ```console
     $ cp ${OPENTITAN_VAR_DIR}/config/provapp.service ~/.config/systemd/user/.
@@ -96,20 +127,37 @@ installation directory (e.g., `/opt/opentitan-prov`).
     $ systemctl --user start provapp.service
     ```
 
-6. (Optional) Initialize tokens. If the deployment uses an HSM, it may be
-   necessary to initialize the tokens. This script currently used in `dev`
-   mode. The `prod` configuration requires interacting with an offline 
-   HSM, so it is recommended to call the HSM initialization scripts
-   directly.
+7. (Optional) HSM Token Initialization
 
-    ```console
-    $ if [ -f "${OPENTITAN_VAR_DIR}/config/token_init.sh" ]; then
-        echo "Initializing tokens ..."
-        sudo DEPLOY_ENV="${DEPLOY_ENV}" ${OPENTITAN_VAR_DIR}/config/token_init.sh
-    fi
-    ```
+   If the deployment uses Hardware Security Modules (HSMs), the tokens must be
+   initialized with the required cryptographic assets. This is a multi-step
+   process that involves both an offline, air-gapped HSM and the online SPM HSM.
 
-7. (Optional) Use the following command to execute the PA server load test:
+   Before you begin, you must configure the HSM settings by editing the
+   environment file for your deployment. For a production environment, this file
+   is located at:
+
+   `${OPENTITAN_VAR_DIR}/config/env/prod/spm.env`
+
+   You must update the following variables in this file to match your HSM
+   hardware and security policies:
+   *   `SPM_HSM_TOKEN_SPM`: The name of the online SPM HSM token.
+   *   `SPM_HSM_TOKEN_OFFLINE`: The name of the offline HSM token.
+   *   `SPM_HSM_PIN_USER`: The user PIN for accessing the HSMs.
+   *   `HSMTOOL_MODULE`: The absolute path to the HSM's PKCS#11 library
+       (e.g., `/usr/safenet/lunaclient/lib/libCryptoki2_64.so`).
+   *   See configuration file for other PKCS11 related settings.
+
+   Once the `spm.env` file is configured, you can proceed with the
+   initialization flow. This process is orchestrated by the `token_init.sh`
+   script but requires manual intervention to transfer artifacts between the
+   physically separate HSM environments.
+
+   For a complete, step-by-step guide on this procedure, please refer to the
+   [End to End SKU Provisioning Flow](https://github.com/lowRISC/opentitan-provisioning/wiki/hsm#end-to-end-sku-provisioning-flow)
+   section in the HSM Configuration document.
+
+8. (Optional) Use the following command to execute the PA server load test:
 
     ```console
     $ ${OPENTITAN_VAR_DIR}/release/loadtest \
@@ -119,7 +167,7 @@ installation directory (e.g., `/opt/opentitan-prov`).
         --total_calls_per_method=10
     ```
 
-8. (Optional) Run the previous step after system reboot.
+9. (Optional) Run the previous step after system reboot.
 
 ### Infra (pause) Container
 
@@ -147,7 +195,7 @@ The following steps can be used to test the install from a development environme
 # The following flags can be used:
 # * --debug: Skips tearing down of containers. Useful if access to container logs
 #   is required.
-# * --prod: Builds and deploys the test environment using the test configuration. 
+# * --prod: Builds and deploys the test environment using the test configuration.
 #   This involves connecting to a physical HSM.
 FPGA=skip ./run_integration_tests.sh
 ```

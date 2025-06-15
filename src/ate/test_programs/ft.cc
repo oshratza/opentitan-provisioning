@@ -295,16 +295,19 @@ int main(int argc, char **argv) {
 
   // Unpack the provisioning data (TBS certs, device ID, dev seeds, etc.) from
   // the perso blob.
-  constexpr size_t kNumTbsCerts = 10;
   device_id_bytes_t device_id;
   endorse_cert_signature_t tbs_was_hmac = {.raw = {0}};
-  size_t num_tbs_certs = kNumTbsCerts;
-  endorse_cert_request_t endorse_certs_requests[kNumTbsCerts];
-  device_dev_seed_t dev_seeds;
-  size_t dev_seeds_count;
+  constexpr size_t kMaxNumCerts = 10;
+  size_t num_tbs_certs = kMaxNumCerts;
+  endorse_cert_request_t x509_tbs_certs[kMaxNumCerts];
+  size_t num_certs = kMaxNumCerts;
+  endorse_cert_response_t x509_certs[kMaxNumCerts];
+  constexpr size_t kMaxDevSeeds = 5;
+  dev_seed_t dev_seeds[kMaxDevSeeds];
+  size_t num_dev_seeds = kMaxDevSeeds;
   if (UnpackPersoBlob(&perso_blob_from_dut, &device_id, &tbs_was_hmac,
-                      &num_tbs_certs, endorse_certs_requests, &dev_seeds,
-                      &dev_seeds_count) != 0) {
+                      x509_tbs_certs, &num_tbs_certs, x509_certs, &num_certs,
+                      dev_seeds, &num_dev_seeds) != 0) {
     LOG(ERROR) << "Failed to unpack the perso blob from the DUT.";
     return -1;
   }
@@ -316,7 +319,8 @@ int main(int argc, char **argv) {
                                device_id_words[5], device_id_words[4],
                                device_id_words[3], device_id_words[2],
                                device_id_words[1], device_id_words[0]);
-  LOG(INFO) << "Number of TBS certs to endorse: " << num_tbs_certs;
+  LOG(INFO) << "Number of X.509 TBS certs extracted: " << num_tbs_certs;
+  LOG(INFO) << "Number of X.509 certs extracted:     " << num_certs;
 
   // Endorse the TBS certs with the PA/SPM.
   // TODO(timothytrippel): Set diversifier to "was" || CP device ID.
@@ -325,10 +329,10 @@ int main(int argc, char **argv) {
     LOG(ERROR) << "Failed to set diversifier for WAS.";
     return -1;
   }
-  endorse_cert_response_t endorse_certs_responses[kNumTbsCerts];
+  endorse_cert_response_t endorsed_x509_certs[num_tbs_certs];
   if (EndorseCerts(ate_client, absl::GetFlag(FLAGS_sku).c_str(),
                    &was_diversifier, &tbs_was_hmac, num_tbs_certs,
-                   endorse_certs_requests, endorse_certs_responses) != 0) {
+                   x509_tbs_certs, endorsed_x509_certs) != 0) {
     LOG(ERROR) << "Failed to endorse certs.";
     return -1;
   }
@@ -338,8 +342,7 @@ int main(int argc, char **argv) {
   constexpr size_t kNumPersoBlobMaxNumSpiFrames = 10;
   dut_spi_frame_t perso_blob_from_ate_spi_frames[kNumPersoBlobMaxNumSpiFrames];
   size_t num_perso_blob_spi_frames = kNumPersoBlobMaxNumSpiFrames;
-  if (PackPersoBlob(num_tbs_certs, endorse_certs_responses,
-                    &perso_blob_from_ate) != 0) {
+  if (PackPersoBlob(num_tbs_certs, x509_certs, &perso_blob_from_ate) != 0) {
     LOG(ERROR) << "Failed to repack the perso blob.";
     return -1;
   }
@@ -365,8 +368,6 @@ int main(int argc, char **argv) {
   }
 
   // Register the device.
-  // TODO(timothytrippel): add helper function to translate kDifLcCtrlStateProd
-  // to kDeviceLifeCycleProd
   metadata_t dut_metadata = {
       .year = 0,
       .week = 10,
@@ -375,13 +376,21 @@ int main(int argc, char **argv) {
       .x = 25,
       .y = 52,
   };
-  // TODO(timothytrippel): extract the perso TLV data and perso FW hash
-  perso_tlv_data_t perso_tlv_data = {.size = 10, .data = {0}};
+  perso_blob_t perso_blob_for_registry;
+  if (PackRegistryPersoTlvData(x509_certs, num_certs, endorsed_x509_certs,
+                               num_tbs_certs, dev_seeds, num_dev_seeds,
+                               &perso_blob_for_registry) != 0) {
+    LOG(ERROR) << "PackRegistryPersoTlvData failed.";
+    return -1;
+  }
+  // TODO(timothytrippel): extract the perso FW hash
   perso_fw_sha256_hash_t perso_fw_hash = {.raw = {0}};
+  // TODO(timothytrippel): add helper function to translate kDifLcCtrlStateProd
+  // to kDeviceLifeCycleProd
   if (RegisterDevice(ate_client, absl::GetFlag(FLAGS_sku).c_str(),
                      reinterpret_cast<const device_id_t *>(&device_id),
                      kDeviceLifeCycleProd, &dut_metadata,
-                     &wrapped_rma_token_seed, &perso_tlv_data,
+                     &wrapped_rma_token_seed, &perso_blob_for_registry,
                      &perso_fw_hash) != 0) {
     LOG(ERROR) << "RegisterDevice failed.";
     return -1;

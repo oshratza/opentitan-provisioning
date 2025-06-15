@@ -49,9 +49,9 @@ enum {
   kDutSpiFrameHeaderSize = 4,
   kDutSpiFrameSize = 2048 - kDutSpiFrameHeaderSize,
 
-  /** Maximum device dev seed max size in uint32_t words. */
-  kDeviceDevSeedWordSize = 32,
-  kDeviceDevSeedBytesSize = kDeviceDevSeedWordSize * sizeof(uint32_t),
+  /** Maximum dev seed max size in uint32_t words. */
+  kDevSeedWordSize = 32,
+  kDevSeedBytesSize = kDevSeedWordSize * sizeof(uint32_t),
 
   /** Diversification string size. */
   kDiversificationStringSize = 48,
@@ -149,7 +149,7 @@ typedef struct perso_blob {
    */
   size_t num_objects;
   /**
-   * The offset of the next free object in the blob.
+   * The offset of the next free object in the blob. Also the size in bytes.
    */
   size_t next_free;
   /**
@@ -231,16 +231,16 @@ typedef struct endorse_cert_signature {
   uint8_t raw[kWasHmacSignatureSize];
 } endorse_cert_signature_t;
 
-typedef struct device_dev_seed {
+typedef struct dev_seed {
   /**
-   * The size of the seed in bytes.
+   * The size of the dev seed in bytes.
    */
   size_t size;
   /**
-   * The seed data.
+   * The dev seed data.
    */
-  uint8_t raw[kDeviceDevSeedBytesSize];
-} device_dev_seed_t;
+  uint8_t raw[kDevSeedBytesSize];
+} dev_seed_t;
 
 /**
  * Request parameters for endorsing certificates.
@@ -378,17 +378,6 @@ typedef struct wrapped_seed {
 typedef struct ca_subject_key {
   uint8_t data[kCaSubjectKeySize];
 } ca_subject_key_t;
-
-/**
- * Personalization TLV data structure that contains all the data (certs, seeds,
- * etc.) that is saved in the device registry database.
- */
-typedef struct perso_tlv_data {
-  /** Perso TLV data structure size in bytes. */
-  size_t size;
-  /** Perso TLV data bytes. */
-  uint8_t data[kPersoTlvDataMaxSize];
-} perso_tlv_data_t;
 
 /**
  * Type used to wrap the personalization firmware hash raw bytes.
@@ -586,14 +575,18 @@ DLLEXPORT int EndorseCerts(ate_client_ptr client, const char* sku,
  *
  * @param client A client instance.
  * @param sku The SKU of the product to endorse the certificates for.
- * @param request The request parameters for the registration.
+ * @param device_life_cycle The lifecycle state the DUT was provisioned in.
+ * @param metadata The metadata associated with the provisioned DUT.
+ * @param wrapped_rma_unlock_token_seed The encrypted RMA unlock token seed.
+ * @param perso_blob_for_registry The perso blob TLV data structure to store.
+ * @param perso_fw_hash The hash of the perso firmware that was executed.
  * @return The result of the operation.
  */
 DLLEXPORT int RegisterDevice(
     ate_client_ptr client, const char* sku, const device_id_t* device_id,
     device_life_cycle_t device_life_cycle, const metadata_t* metadata,
     const wrapped_seed_t* wrapped_rma_unlock_token_seed,
-    const perso_tlv_data_t* perso_tlv_data,
+    const perso_blob_t* perso_blob_for_registry,
     const perso_fw_sha256_hash_t* perso_fw_hash);
 
 /**
@@ -679,20 +672,22 @@ DLLEXPORT int PersoBlobFromJson(const dut_spi_frame_t* frames,
  * @param blob The personalization blob to unpack.
  * @param[out] device_id The extracted device ID.
  * @param[out] hmac The HMAC over the TBS certificates.
- * @param[out] cert_count The number of TBS certificates found. Initialized to
- * the size of `request`.
- * @param[out] request The request parameters for certificate endorsement.
- * @param[out] seeds The extracted device seeds. Initialized to the size of
- * `seeds`.
- * @param[out] seed_count The number of device seeds found.
+ * @param[out] x509_tbs_certs Array of X.509 TBS certs.
+ * @param[out] tbs_cert_count The number of TBS certs found. Initialized
+ * to the size of `x509_tbs_certs`.
+ * @param[out] x509_certs Array of (fully formed) X.509 certs.
+ * @param[out] cert_count The number of certs found. Initialized to the size of
+ * `x509_certs`.
+ * @param[out] dev_seeds The extracted dev_seeds.
+ * @param[out] dev_seed_count The number of dev_seeds found. Initialized to the
+ * size of `dev_seeds`.
  * @return The result of the operation.
  */
-DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
-                              device_id_bytes_t* device_id,
-                              endorse_cert_signature_t* signature,
-                              size_t* cert_count,
-                              endorse_cert_request_t* request,
-                              device_dev_seed_t* seeds, size_t* seed_count);
+DLLEXPORT int UnpackPersoBlob(
+    const perso_blob_t* blob, device_id_bytes_t* device_id,
+    endorse_cert_signature_t* signature, endorse_cert_request_t* x509_tbs_certs,
+    size_t* tbs_cert_count, endorse_cert_response_t* x509_certs,
+    size_t* cert_count, dev_seed_t* dev_seeds, size_t* dev_seed_count);
 
 /**
  * Pack a personalization blob from the endorsed certificates.
@@ -705,6 +700,26 @@ DLLEXPORT int UnpackPersoBlob(const perso_blob_t* blob,
 DLLEXPORT int PackPersoBlob(size_t cert_count,
                             const endorse_cert_response_t* certs,
                             perso_blob_t* blob);
+
+/**
+ * Pack a personalization blob containing all assets (certs and seeds) to be
+ * sent to the device registry.
+ *
+ * @param certs_endorsed_by_dut X.509 certificates endorsed by the DUT.
+ * @param num_certs_endorsed_by_dut Size of the above.
+ * @param certs_endorsed_by_spm X.509 certificates endorsed by the SPM.
+ * @param num_certs_endorsed_by_spm Size of the above.
+ * @param dev_seeds dev_seed objects generated by the DUT.
+ * @param num_dev_seeds Size of the above.
+ * @param[out] blob The personalization blob to pack the assets into.
+ * @return The result of the operation.
+ */
+DLLEXPORT int PackRegistryPersoTlvData(
+    const endorse_cert_response_t* certs_endorsed_by_dut,
+    size_t num_certs_endorsed_by_dut,
+    const endorse_cert_response_t* certs_endorsed_by_spm,
+    size_t num_certs_endorsed_by_spm, const dev_seed_t* dev_seeds,
+    size_t num_dev_seeds, perso_blob_t* output);
 
 #ifdef __cplusplus
 }
