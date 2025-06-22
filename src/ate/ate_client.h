@@ -20,9 +20,14 @@ namespace ate {
 class AteClient {
  public:
   struct Options {
-    // Endpoint address in IP or DNS format including port number. For example:
-    // "localhost:5000".
-    std::string pa_socket;
+    // Endpoint address in gRPC name-syntax format, including port number. For
+    // example: "localhost:5000", "ipv4:127.0.0.1:5000,127.0.0.2:5000", or
+    // "ipv6:[::1]:5000,[::1]:5001".
+    std::string pa_target;
+
+    // gRPC load balancing policy. If not set, it will be selected by the gRPC
+    // library. For example: "round_robin" or "pick_first".
+    std::string load_balancing_policy;
 
     // Set to true to enable mTLS connection. When set to false, the connection
     // is established with insecure credentials.
@@ -44,14 +49,26 @@ class AteClient {
     std::vector<std::string> sku_tokens;
   };
 
-  // Constructs an AteClient given a GRPC stub.
-  AteClient(
+  // Constructs an AteClient given a GRPC channel.
+  AteClient(std::shared_ptr<grpc::Channel> channel)
+      : channel_(channel),
+        stub_(pa::ProvisioningApplianceService::NewStub(channel)) {}
+
+  // Constructs an AteClient with a mock stub for testing purposes.
+  explicit AteClient(
       std::unique_ptr<pa::ProvisioningApplianceService::StubInterface> stub)
-      : stub_(std::move(stub)) {}
+      : channel_(nullptr), stub_(std::move(stub)) {}
 
   // Forbids copies or assignments of AteClient.
   AteClient(const AteClient&) = delete;
   AteClient& operator=(const AteClient&) = delete;
+
+  // Overload the new and delete operators to allow for usage in a DLL.
+  // This ensures that the memory for AteClient objects is allocated and
+  // deallocated on the same heap, preventing corruption issues when the DLL
+  // and executable have different C++ runtimes.
+  void* operator new(size_t size);
+  void operator delete(void* ptr);
 
   // Creates an AteClient. See configuration `Options` for more details.
   static std::unique_ptr<AteClient> Create(Options options);
@@ -85,6 +102,7 @@ class AteClient {
   std::string ate_id;
 
  private:
+  std::shared_ptr<grpc::Channel> channel_;
   std::unique_ptr<pa::ProvisioningApplianceService::StubInterface> stub_;
   std::string sku_session_token_;
 };

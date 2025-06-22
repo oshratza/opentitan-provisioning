@@ -42,7 +42,15 @@ ABSL_FLAG(std::string, ft_fw_bundle_bin, "",
 /**
  * PA configuration flags.
  */
-ABSL_FLAG(std::string, pa_socket, "", "host:port of the PA server.");
+ABSL_FLAG(std::string, pa_target, "",
+          "Endpoint address in gRPC name-syntax format, including port "
+          "number. For example: \"localhost:5000\", "
+          "\"ipv4:127.0.0.1:5000,127.0.0.2:5000\", or "
+          "\"ipv6:[::1]:5000,[::1]:5001\".");
+ABSL_FLAG(std::string, load_balancing_policy, "",
+          "gRPC load balancing policy. If not set, it will be selected by "
+          "the gRPC library. For example: \"round_robin\" or "
+          "\"pick_first\".");
 ABSL_FLAG(std::string, sku, "", "SKU string to initialize the PA session.");
 ABSL_FLAG(std::string, sku_auth_pw, "",
           "SKU authorization password string to initialize the PA session.");
@@ -65,13 +73,16 @@ using provisioning::test_programs::DutLib;
 absl::StatusOr<ate_client_ptr> AteClientNew(void) {
   client_options_t options;
 
-  std::string pa_socket = absl::GetFlag(FLAGS_pa_socket);
-  if (pa_socket.empty()) {
+  std::string pa_target = absl::GetFlag(FLAGS_pa_target);
+  if (pa_target.empty()) {
     return absl::InvalidArgumentError(
-        "--pa_socket not set. This is a required argument.");
+        "--pa_target not set. This is a required argument.");
   }
-  options.pa_socket = pa_socket.c_str();
+  options.pa_target = pa_target.c_str();
   options.enable_mtls = absl::GetFlag(FLAGS_enable_mtls);
+
+  std::string lb_policy = absl::GetFlag(FLAGS_load_balancing_policy);
+  options.load_balancing_policy = lb_policy.c_str();
 
   std::string pem_private_key = absl::GetFlag(FLAGS_client_key);
   std::string pem_cert_chain = absl::GetFlag(FLAGS_client_cert);
@@ -90,7 +101,9 @@ absl::StatusOr<ate_client_ptr> AteClientNew(void) {
   }
 
   ate_client_ptr ate_client;
-  CreateClient(&ate_client, &options);
+  if (CreateClient(&ate_client, &options) != 0) {
+    return absl::InternalError("Failed to create ATE client.");
+  }
   if (ate_client == nullptr) {
     return absl::InternalError("Failed to create ATE client.");
   }
@@ -231,14 +244,18 @@ int main(int argc, char **argv) {
     return -1;
   }
   dut_spi_frame_t rma_token_spi_frame;
-  if (RmaTokenToJson(&rma_token, &rma_token_spi_frame) != 0) {
+  if (RmaTokenToJson(&rma_token, &rma_token_spi_frame, /*skip_crc=*/false) !=
+      0) {
     LOG(ERROR) << "RmaTokenToJson failed.";
     return -1;
   }
 
   // Generate CA subject keys.
-  constexpr size_t kNumIcas = 1;
-  const char *kIcaCertLabels[] = {"SigningKey/Dice/v0"};
+  constexpr size_t kNumIcas = 2;
+  const char *kIcaCertLabels[] = {
+      "UDS",
+      "EXT",
+  };
   ca_subject_key_t key_ids[kNumIcas];
   if (GetCaSubjectKeys(ate_client, absl::GetFlag(FLAGS_sku).c_str(),
                        /*count=*/kNumIcas, kIcaCertLabels, key_ids) != 0) {
@@ -246,9 +263,9 @@ int main(int argc, char **argv) {
     return -1;
   }
   const ca_subject_key_t *kDiceCaSk = &key_ids[0];
-  const ca_subject_key_t kExtCaSk = {0};
+  const ca_subject_key_t *kExtCaSk = &key_ids[1];
   dut_spi_frame_t ca_key_ids_spi_frame;
-  if (CaSubjectKeysToJson(kDiceCaSk, &kExtCaSk, &ca_key_ids_spi_frame) != 0) {
+  if (CaSubjectKeysToJson(kDiceCaSk, kExtCaSk, &ca_key_ids_spi_frame) != 0) {
     LOG(ERROR) << "CaSubjectKeysToJson failed.";
     return -1;
   }
@@ -281,12 +298,8 @@ int main(int argc, char **argv) {
                     &num_pb_spi_frames,
                     /*skip_crc_check=*/true,
                     /*quiet=*/true,
-                    /*timeout_ms=*/5000);
-  perso_blob_t perso_blob_from_dut = {
-      .num_objects = 0,
-      .next_free = kPersoBlobMaxSize,
-      .body = {0},
-  };
+                    /*timeout_ms=*/10000);
+  perso_blob_t perso_blob_from_dut = {0};
   if (PersoBlobFromJson(pb_spi_frames, num_pb_spi_frames,
                         &perso_blob_from_dut)) {
     LOG(ERROR) << "PersoBlobFromJson failed.";
@@ -297,17 +310,18 @@ int main(int argc, char **argv) {
   // the perso blob.
   device_id_bytes_t device_id;
   endorse_cert_signature_t tbs_was_hmac = {.raw = {0}};
+  perso_fw_sha256_hash_t perso_fw_hash = {.raw = {0}};
   constexpr size_t kMaxNumCerts = 10;
   size_t num_tbs_certs = kMaxNumCerts;
   endorse_cert_request_t x509_tbs_certs[kMaxNumCerts];
   size_t num_certs = kMaxNumCerts;
   endorse_cert_response_t x509_certs[kMaxNumCerts];
-  constexpr size_t kMaxDevSeeds = 5;
-  dev_seed_t dev_seeds[kMaxDevSeeds];
-  size_t num_dev_seeds = kMaxDevSeeds;
+  constexpr size_t kMaxSeeds = 5;
+  seed_t seeds[kMaxSeeds];
+  size_t num_seeds = kMaxSeeds;
   if (UnpackPersoBlob(&perso_blob_from_dut, &device_id, &tbs_was_hmac,
-                      x509_tbs_certs, &num_tbs_certs, x509_certs, &num_certs,
-                      dev_seeds, &num_dev_seeds) != 0) {
+                      &perso_fw_hash, x509_tbs_certs, &num_tbs_certs,
+                      x509_certs, &num_certs, seeds, &num_seeds) != 0) {
     LOG(ERROR) << "Failed to unpack the perso blob from the DUT.";
     return -1;
   }
@@ -338,11 +352,12 @@ int main(int argc, char **argv) {
   }
 
   // Send the endorsed certs back to the device.
-  perso_blob_t perso_blob_from_ate;
+  perso_blob_t perso_blob_from_ate = {0};
   constexpr size_t kNumPersoBlobMaxNumSpiFrames = 10;
   dut_spi_frame_t perso_blob_from_ate_spi_frames[kNumPersoBlobMaxNumSpiFrames];
   size_t num_perso_blob_spi_frames = kNumPersoBlobMaxNumSpiFrames;
-  if (PackPersoBlob(num_tbs_certs, x509_certs, &perso_blob_from_ate) != 0) {
+  if (PackPersoBlob(num_tbs_certs, endorsed_x509_certs, &perso_blob_from_ate) !=
+      0) {
     LOG(ERROR) << "Failed to repack the perso blob.";
     return -1;
   }
@@ -378,13 +393,11 @@ int main(int argc, char **argv) {
   };
   perso_blob_t perso_blob_for_registry;
   if (PackRegistryPersoTlvData(x509_certs, num_certs, endorsed_x509_certs,
-                               num_tbs_certs, dev_seeds, num_dev_seeds,
+                               num_tbs_certs, seeds, num_seeds,
                                &perso_blob_for_registry) != 0) {
     LOG(ERROR) << "PackRegistryPersoTlvData failed.";
     return -1;
   }
-  // TODO(timothytrippel): extract the perso FW hash
-  perso_fw_sha256_hash_t perso_fw_hash = {.raw = {0}};
   // TODO(timothytrippel): add helper function to translate kDifLcCtrlStateProd
   // to kDeviceLifeCycleProd
   if (RegisterDevice(ate_client, absl::GetFlag(FLAGS_sku).c_str(),

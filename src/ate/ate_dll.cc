@@ -72,7 +72,6 @@ static_assert(
     "LC state enum must match proto enum (Scrap)");
 
 std::string extractDNSNameFromCert(const char *certPath) {
-  DLOG(INFO) << "extractDNSNameFromCert";
   FILE *certFile = fopen(certPath, "r");
   if (!certFile) {
     LOG(ERROR) << "Failed to open certificate file";
@@ -170,7 +169,7 @@ absl::Status LoadPEMResources(AteClient::Options *options,
 
 static ate_client_ptr ate_client = nullptr;
 
-DLLEXPORT void CreateClient(
+DLLEXPORT int CreateClient(
     ate_client_ptr *client,    // Out: the created client instance
     client_options_t *options  // In: secure channel attributes
 ) {
@@ -179,7 +178,10 @@ DLLEXPORT void CreateClient(
 
   // convert from ate_client_ptr to AteClient::Options
   o.enable_mtls = options->enable_mtls;
-  o.pa_socket = options->pa_socket;
+  o.pa_target = options->pa_target;
+  if (options->load_balancing_policy != nullptr) {
+    o.load_balancing_policy = options->load_balancing_policy;
+  }
   if (o.enable_mtls) {
     // Load the PEM data from the pointed files
     absl::Status s =
@@ -187,6 +189,7 @@ DLLEXPORT void CreateClient(
                          options->pem_root_certs);
     if (!s.ok()) {
       LOG(ERROR) << "Failed to load needed PEM resources";
+      return static_cast<int>(s.code());
     }
   }
 
@@ -213,14 +216,17 @@ DLLEXPORT void CreateClient(
   *client = ate_client;
 
   LOG(INFO) << "debug info: returned from CreateClient with ate = " << *client;
+  return 0;
 }
 
 DLLEXPORT void DestroyClient(ate_client_ptr client) {
   DLOG(INFO) << "DestroyClient";
-  if (ate_client != nullptr) {
+  if (client != nullptr && client == ate_client) {
     AteClient *ate = reinterpret_cast<AteClient *>(client);
     delete ate;
     ate_client = nullptr;
+  } else {
+    LOG(ERROR) << "DestroyClient called with invalid client pointer";
   }
 }
 
@@ -512,11 +518,7 @@ DLLEXPORT int EndorseCerts(ate_client_ptr client, const char *sku,
       return static_cast<int>(absl::StatusCode::kInvalidArgument);
     }
     std::string cert_label(req_params.key_label, req_params.key_label_size);
-    if (cert_label == "UDS") {
-      signing_params->set_key_label("SigningKey/Dice/v0");
-    } else {
-      signing_params->set_key_label("SigningKey/Ext/v0");
-    }
+    signing_params->set_key_label(cert_label);
 
     // Only ECDSA keys are supported at this time.
     auto key = signing_params->mutable_ecdsa_params();

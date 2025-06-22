@@ -49,9 +49,19 @@ enum {
   kDutSpiFrameHeaderSize = 4,
   kDutSpiFrameSize = 2048 - kDutSpiFrameHeaderSize,
 
-  /** Maximum dev seed max size in uint32_t words. */
+  /**
+   * Dev seed size in bytes; Must be equal to the value defined in
+   * perso_tlb_data.h in the lowRISC/opentitan repo.
+   */
   kDevSeedWordSize = 32,
   kDevSeedBytesSize = kDevSeedWordSize * sizeof(uint32_t),
+
+  /**
+   * Generic seed max size in bytes; Must be equal or larger to the maximum seed
+   * size provisioned by the personalization firmware.
+   */
+  kGenericSeedMaxWordSize = 8,
+  kGenericSeedMaxBytesSize = kGenericSeedMaxWordSize * sizeof(uint32_t),
 
   /** Diversification string size. */
   kDiversificationStringSize = 48,
@@ -63,16 +73,14 @@ enum {
   kCertificateKeyLabelMaxSize = 32,
 
   /**
-   * Maximum perso blob (RXed from DUT) size in bytes; Must match definition in
-   * provisioning_data.h in lowRISC/opentitan repo.
+   * Maximum perso blob (RXed from DUT and TXed to the PA/Registry) size in
+   * bytes; Must be equal-to or larger than the value definited in
+   * provisioning_data.h in the lowRISC/opentitan repo.
    */
-  kPersoBlobMaxSize = 5120,
+  kPersoBlobMaxSize = 8192,
 
-  /**
-   * Maximum perso TLV data structure size in bytes; this is the data structure
-   * that is stored in the device registry.
-   */
-  kPersoTlvDataMaxSize = 8192,
+  /** Maximum length of an endpoint address string. */
+  kEndpointAddressMaxSize = 256,
 };
 
 /**
@@ -82,9 +90,16 @@ typedef struct {
 } * ate_client_ptr;
 
 typedef struct {
-  // Endpoint address in IP or DNS format including port number. For example:
-  // "localhost:5000".
-  const char* pa_socket;
+  // Endpoint address in gRPC name-syntax format, including port number. For
+  // example: "localhost:5000", "ipv4:127.0.0.1:5000,127.0.0.2:5000", or
+  // "ipv6:[::1]:5000,[::1]:5001".
+  // Using a single address will disable load balancing.
+  const char* pa_target;
+
+  // gRPC load balancing policy. If not set, it will be selected by the gRPC
+  // library. For example: "round_robin" or "pick_first". Leaving this field
+  // empty will use the default policy.
+  const char* load_balancing_policy;
 
   // File containing the Client certificate in PEM format. Required when
   // `enable_mtls` set to true.
@@ -231,16 +246,22 @@ typedef struct endorse_cert_signature {
   uint8_t raw[kWasHmacSignatureSize];
 } endorse_cert_signature_t;
 
-typedef struct dev_seed {
+typedef struct seed {
   /**
-   * The size of the dev seed in bytes.
+   * The size of the seed in bytes.
    */
   size_t size;
   /**
-   * The dev seed data.
+   * The type of the seed.
+   */
+  uint16_t type;
+  /**
+   * The seed data.
+   *
+   * Should be the max of (kDevSeedBytesSize, kGenericSeedMaxBytesSize).
    */
   uint8_t raw[kDevSeedBytesSize];
-} dev_seed_t;
+} seed_t;
 
 /**
  * Request parameters for endorsing certificates.
@@ -458,8 +479,9 @@ typedef struct register_device_request {
  *
  * @param client A pointer (an `ate_client_ptr`) to the created client instance.
  * @param options The secure channel attributes.
+ * @return The result of the operation.
  */
-DLLEXPORT void CreateClient(ate_client_ptr* client, client_options_t* options);
+DLLEXPORT int CreateClient(ate_client_ptr* client, client_options_t* options);
 
 /**
  * Destroys an AteClient instance.
@@ -618,9 +640,11 @@ DLLEXPORT int DeviceIdFromJson(const dut_spi_frame_t* frame,
  *
  * @param rma_token The RMA token.
  * @param[out] result The generated JSON command.
+ * @param skip_crc Whether or not to skip attaching of the CRC.
  * @return The result of the operation.
  */
-DLLEXPORT int RmaTokenToJson(const token_t* rma_token, dut_spi_frame_t* result);
+DLLEXPORT int RmaTokenToJson(const token_t* rma_token, dut_spi_frame_t* result,
+                             bool skip_crc);
 
 /**
  * Parse JSON command to extract the RMA token from the SPI frame.
@@ -671,23 +695,25 @@ DLLEXPORT int PersoBlobFromJson(const dut_spi_frame_t* frames,
  *
  * @param blob The personalization blob to unpack.
  * @param[out] device_id The extracted device ID.
- * @param[out] hmac The HMAC over the TBS certificates.
+ * @param[out] signature The HMAC signature over the TBS certificates.
+ * @param[out] perso_fw_hash The hash of the personalization firmware.
  * @param[out] x509_tbs_certs Array of X.509 TBS certs.
  * @param[out] tbs_cert_count The number of TBS certs found. Initialized
  * to the size of `x509_tbs_certs`.
  * @param[out] x509_certs Array of (fully formed) X.509 certs.
  * @param[out] cert_count The number of certs found. Initialized to the size of
  * `x509_certs`.
- * @param[out] dev_seeds The extracted dev_seeds.
- * @param[out] dev_seed_count The number of dev_seeds found. Initialized to the
- * size of `dev_seeds`.
+ * @param[out] seeds The extracted seeds.
+ * @param[out] seed_count The number of seeds found. Initialized to the size of
+ * `seeds`.
  * @return The result of the operation.
  */
 DLLEXPORT int UnpackPersoBlob(
     const perso_blob_t* blob, device_id_bytes_t* device_id,
-    endorse_cert_signature_t* signature, endorse_cert_request_t* x509_tbs_certs,
-    size_t* tbs_cert_count, endorse_cert_response_t* x509_certs,
-    size_t* cert_count, dev_seed_t* dev_seeds, size_t* dev_seed_count);
+    endorse_cert_signature_t* signature, perso_fw_sha256_hash_t* perso_fw_hash,
+    endorse_cert_request_t* x509_tbs_certs, size_t* tbs_cert_count,
+    endorse_cert_response_t* x509_certs, size_t* cert_count, seed_t* seeds,
+    size_t* seed_count);
 
 /**
  * Pack a personalization blob from the endorsed certificates.
@@ -709,8 +735,8 @@ DLLEXPORT int PackPersoBlob(size_t cert_count,
  * @param num_certs_endorsed_by_dut Size of the above.
  * @param certs_endorsed_by_spm X.509 certificates endorsed by the SPM.
  * @param num_certs_endorsed_by_spm Size of the above.
- * @param dev_seeds dev_seed objects generated by the DUT.
- * @param num_dev_seeds Size of the above.
+ * @param seeds Seed objects generated by the DUT.
+ * @param num_seeds Size of the above.
  * @param[out] blob The personalization blob to pack the assets into.
  * @return The result of the operation.
  */
@@ -718,8 +744,8 @@ DLLEXPORT int PackRegistryPersoTlvData(
     const endorse_cert_response_t* certs_endorsed_by_dut,
     size_t num_certs_endorsed_by_dut,
     const endorse_cert_response_t* certs_endorsed_by_spm,
-    size_t num_certs_endorsed_by_spm, const dev_seed_t* dev_seeds,
-    size_t num_dev_seeds, perso_blob_t* output);
+    size_t num_certs_endorsed_by_spm, const seed_t* seeds, size_t num_seeds,
+    perso_blob_t* output);
 
 #ifdef __cplusplus
 }

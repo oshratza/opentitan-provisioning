@@ -7,12 +7,12 @@ load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 
 _MISC_LINTERS_VERSION = "20240820_01"
 _BAZEL_RELEASE_VERSION = "0.0.3"
-_BAZEL_SKYLIB_VERSION = "1.5.0"
+_BAZEL_SKYLIB_VERSION = "1.7.1"
 
 # When updating the lowrisc_opentitan repo, be sure to rebuild the builtstream
 # files too by following the instructions in
 # `third_party/lowrisc/README.md`.
-_OPENTITAN_VERSION = "Earlgrey-A2-Provisioning-RC8"
+_OPENTITAN_VERSION = "Earlgrey-A2-Orchestrator-RC2"
 
 def lowrisc_repos(misc_linters = None, bazel_release = None, bazel_skylib = None, opentitan = None):
     maybe(
@@ -35,7 +35,7 @@ def lowrisc_repos(misc_linters = None, bazel_release = None, bazel_skylib = None
         http_archive_or_local,
         name = "bazel_skylib",
         lcoal = bazel_skylib,
-        sha256 = "cd55a062e763b9349921f0f5db8c3933288dc8ba4f76dd9416aac68acee3cb94",
+        sha256 = "bc283cdfcd526a52c3201279cda4bc298652efa898b10b4db0837dc51652756f",
         url = "https://github.com/bazelbuild/bazel-skylib/releases/download/{}/bazel-skylib-{}.tar.gz".format(
             _BAZEL_SKYLIB_VERSION,
             _BAZEL_SKYLIB_VERSION,
@@ -45,7 +45,7 @@ def lowrisc_repos(misc_linters = None, bazel_release = None, bazel_skylib = None
         http_archive_or_local,
         local = opentitan,
         name = "lowrisc_opentitan",
-        sha256 = "bd5b804c39a04911f5408441747a9b1715a7a38c9ab7f18c01b4490771917d15",
+        sha256 = "f5d67e2c057ebdc5f42fab286076f8b69fba7e21d1ff105a2ddb3a61f415e11e",
         strip_prefix = "opentitan-{}".format(_OPENTITAN_VERSION),
         url = "https://github.com/lowRISC/opentitan/archive/refs/tags/{}.tar.gz".format(_OPENTITAN_VERSION),
     )

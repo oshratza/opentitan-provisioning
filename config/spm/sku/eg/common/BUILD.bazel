@@ -33,8 +33,15 @@ hsm_sku_rma_key(
     name = "sku-eg-rsa-rma-v0",
 )
 
+# All SKUs except pi01 SKU use the same root CA.
 hsm_certificate_authority_root(
     name = "opentitan-ca-root-v0",
+    curve = HSMTOOL_CONST.ECC_CURVE.PRIME256V1,
+)
+
+# pi01 SKU has own root CA.
+hsm_certificate_authority_root(
+    name = "pi01-ca-root-v0",
     curve = HSMTOOL_CONST.ECC_CURVE.PRIME256V1,
 )
 
@@ -43,7 +50,7 @@ hsm_generic_secret(
     wrapping_key = ":eg-aes-wrap-v0",
     wrapping_mechanism = select({
         "//:dev_env": "AesKeyWrap",
-        "//:prod_env": "VendorThalesAesKwp",
+        "//:prod_env": "VendorThalesAesKw",
         "//conditions:default": "AesKeyWrap",
     }),
 )
@@ -53,7 +60,7 @@ hsm_generic_secret(
     wrapping_key = ":eg-aes-wrap-v0",
     wrapping_mechanism = select({
         "//:dev_env": "AesKeyWrap",
-        "//:prod_env": "VendorThalesAesKwp",
+        "//:prod_env": "VendorThalesAesKw",
         "//conditions:default": "AesKeyWrap",
     }),
 )
@@ -65,10 +72,18 @@ hsm_certgen(
     root_cert = True,
 )
 
+hsm_certgen(
+    name = "pi01_ca_root",
+    config = ":pi01_ca_root.conf",
+    key = ":pi01-ca-root-v0",
+    root_cert = True,
+)
+
 hsm_config_tar(
     name = "offline_init",
     hsmtool_sequence = {
         ":opentitan-ca-root-v0": "keygen",
+        ":pi01-ca-root-v0": "keygen",
         ":eg-aes-wrap-v0": "keygen",
         ":eg-kdf-hisec-v0": "keygen",
         ":eg-kdf-losec-v0": "keygen",
@@ -103,6 +118,7 @@ hsm_certgen_tar(
     name = "ca_root_certgen",
     certs = [
         ":ca_root",
+        ":pi01_ca_root",
     ],
 )
 
@@ -113,6 +129,7 @@ filegroup(
         ":ca_root_certgen",
         ":offline_export",
         ":offline_init",
+        ":pi01_ca_root.conf",
         ":spm_sku_init",
     ],
 )

@@ -20,6 +20,7 @@ build --workspace_status_command=util/get_workspace_status.sh
 
 # Enable the rust nightly toolchain
 build --@rules_rust//rust/toolchain/channel=nightly
+build --@rules_rust//cargo/settings:use_default_shell_env=False
 
 # Import site-specific configuration.
 try-import .bazelrc-site

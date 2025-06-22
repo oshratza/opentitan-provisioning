@@ -20,6 +20,7 @@ load(
     "hsmtool_generic_import",
     "hsmtool_generic_keygen",
     "hsmtool_object_destroy",
+    "hsmtool_object_show",
     "hsmtool_pk11_attrs",
     "hsmtool_rsa_export_pub",
     "hsmtool_rsa_import_pub",
@@ -111,7 +112,8 @@ def _hsm_key_template_aes(ctx, keygen_params, import_template = {}):
             wrap = ctx.attr.wrapping_key[KeyTemplateInfo].label_pub,
             wrap_mechanism = ctx.attr.wrapping_mechanism,
         ),
-        "destroy": hsmtool_object_destroy(label),
+        "destroy": [hsmtool_object_destroy(label)],
+        "show": [hsmtool_object_show(label)],
     }
 
     return KeyTemplateInfo(
@@ -165,7 +167,8 @@ def _hsm_key_template_generic(ctx, keygen_params, import_template = {}):
             wrap = ctx.attr.wrapping_key[KeyTemplateInfo].label_pub,
             wrap_mechanism = ctx.attr.wrapping_mechanism,
         ),
-        "destroy": hsmtool_object_destroy(label),
+        "destroy": [hsmtool_object_destroy(label)],
+        "show": [hsmtool_object_show(label)],
     }
 
     return KeyTemplateInfo(
@@ -224,7 +227,15 @@ def _hsm_key_template_ecdsa(ctx, keygen_params, import_template_private = {}, im
             public_attrs = import_template_public,
         ),
         "export_pub": hsmtool_ecdsa_export_pub(label_pub),
-        "destroy": hsmtool_object_destroy(label),
+        "destroy": [
+            hsmtool_object_destroy(label),
+            hsmtool_object_destroy(label_pub),
+            hsmtool_object_destroy(label_priv),
+        ],
+        "show": [
+            hsmtool_object_show(label_pub),
+            hsmtool_object_show(label_priv),
+        ],
     }
 
     if not ctx.attr.export_public_only:
@@ -294,7 +305,15 @@ def _hsm_key_template_rsa(ctx, keygen_params, import_template_private = {}, impo
             public_attrs = import_template_public,
         ),
         "export_pub": hsmtool_rsa_export_pub(label_pub),
-        "destroy": hsmtool_object_destroy(label),
+        "destroy": [
+            hsmtool_object_destroy(label),
+            hsmtool_object_destroy(label_pub),
+            hsmtool_object_destroy(label_priv),
+        ],
+        "show": [
+            hsmtool_object_show(label_pub),
+            hsmtool_object_show(label_priv),
+        ],
     }
 
     if not ctx.attr.export_public_only:
@@ -335,11 +354,22 @@ def _hsm_key_template(ctx):
         fail("Wrapping key must be specified if wrapping mechanism is specified.")
 
     keygen_params = json.decode(ctx.attr.keygen_params)
+    import_template = {}
 
     if ctx.attr.import_template:
         import_template = json.decode(ctx.attr.import_template)
-    else:
-        import_template = {}
+
+    if ctx.attr.type == "generic" and ctx.attr.wrapping_mechanism == "VendorThalesAesKw":
+        # Patch the keygen parameters.
+        keygen_params["template"] |= {
+            "CKA_VALUE_LEN": 32,
+        }
+
+        # Patch the import PKCS#11 attributes template
+        if ctx.attr.import_template:
+            import_template = json.decode(ctx.attr.import_template) | {
+                "CKA_VALUE_LEN": 32,
+            }
 
     if ctx.attr.import_template_private:
         import_template_private = json.decode(ctx.attr.import_template_private)
@@ -398,6 +428,7 @@ hsm_key_template = rule(
                 "AesKeyWrap",
                 "RsaPkcs",
                 "RsaPkcsOaep",
+                "VendorThalesAesKw",
                 "VendorThalesAesKwp",
             ],
         ),
@@ -473,7 +504,17 @@ def _destroy_command(key):
     """
     if "destroy" not in key.hsmtool_cmds:
         fail("Key %s does not have a destroy command." % key.label)
-    return json.decode(key.hsmtool_cmds["destroy"])
+    return key.hsmtool_cmds["destroy"]
+
+def _show_command(key):
+    """Creates a command to show a key in the HSM.
+
+    Args:
+        key: The key to show.
+    """
+    if "show" not in key.hsmtool_cmds:
+        fail("Key %s does not have a show command." % key.label)
+    return key.hsmtool_cmds["show"]
 
 def _process_command(key, command):
     """Creates a command to process a key in the HSM.
@@ -495,9 +536,11 @@ def _hsmtool_genscripts(ctx):
     """
     up_hson_file = ctx.actions.declare_file(ctx.label.name + "_up.hjson")
     down_hjson_file = ctx.actions.declare_file(ctx.label.name + "_down.hjson")
+    show_hjson_file = ctx.actions.declare_file(ctx.label.name + "_show.hjson")
 
     up_dict = []
     down_dict = []
+    show_dict = []
     for key, command in ctx.attr.hsmtool_sequence.items():
         key = key[KeyTemplateInfo]
 
@@ -507,7 +550,10 @@ def _hsmtool_genscripts(ctx):
 
         # Update down command sequence.
         if command in ["keygen", "import"]:
-            down_dict.append(_destroy_command(key))
+            for dcmd in _destroy_command(key):
+                down_dict.append(json.decode(dcmd))
+            for scmd in _show_command(key):
+                show_dict.append(json.decode(scmd))
 
         # Update up command sequence.
         if command == "import" and key.type in ["ecdsa", "rsa"]:
@@ -534,15 +580,20 @@ def _hsmtool_genscripts(ctx):
         output = down_hjson_file,
         content = json.encode_indent(down_dict),
     )
-    return up_hson_file, down_hjson_file
+    ctx.actions.write(
+        output = show_hjson_file,
+        content = json.encode_indent(show_dict),
+    )
+    return up_hson_file, down_hjson_file, show_hjson_file
 
 def _hsm_config_script_impl(ctx):
     out_file = ctx.actions.declare_file(ctx.label.name + ".bash")
-    up_hson_file, down_hjson_file = _hsmtool_genscripts(ctx)
+    up_hson_file, down_hjson_file, show_hjson_file = _hsmtool_genscripts(ctx)
 
     substitutions = {
         "@@INIT_HJSON@@": shell.quote(up_hson_file.basename),
         "@@DESTROY_HJSON@@": shell.quote(down_hjson_file.basename),
+        "@@SHOW_HJSON@@": shell.quote(show_hjson_file.basename),
         "@@HSMTOOL_BIN@@": shell.quote(ctx.executable._hsmtool.basename),
     }
 
@@ -557,6 +608,7 @@ def _hsm_config_script_impl(ctx):
         ctx.executable._hsmtool,
         up_hson_file,
         down_hjson_file,
+        show_hjson_file,
     ]
 
     return DefaultInfo(
@@ -924,22 +976,21 @@ def hsm_generic_secret(name, wrapping_key, wrapping_mechanism):
         wrapping_key: The key used to wrap the key.
         wrapping_mechanism: The mechanism used to wrap the key.
     """
+    _PK11_ATTRS = {
+        "CKA_DERIVE": True,
+        "CKA_SENSITIVE": True,
+        "CKA_SIGN": True,
+        "CKA_TOKEN": True,
+    }
     hsm_key_template(
         name = name,
-        import_template = hsmtool_pk11_attrs({
-            "CKA_DERIVE": True,
-            "CKA_SENSITIVE": True,
-            "CKA_SIGN": True,
-            "CKA_TOKEN": True,
+        import_template = hsmtool_pk11_attrs(_PK11_ATTRS | {
             "CKA_EXTRACTABLE": False,
         }),
         keygen_params = hsmtool_generic_keygen(
             label = name,
-            template = {
-                "CKA_DERIVE": True,
-                "CKA_SENSITIVE": True,
+            template = _PK11_ATTRS | {
                 "CKA_EXTRACTABLE": True,
-                "CKA_TOKEN": True,
             },
         ),
         type = "generic",

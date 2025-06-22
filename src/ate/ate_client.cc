@@ -56,16 +56,33 @@ std::shared_ptr<grpc::ChannelCredentials> BuildCredentials(
 }
 }  // namespace
 
+// By explicitly defining the new and delete operators for the AteClient class
+// and implementing them in the same compilation unit (the DLL), we ensure
+// that the memory for AteClient objects is allocated and deallocated on the
+// same heap.
+//
+// On Windows, a DLL and the executable that loads it can have different C++
+// runtime heaps. If an object is allocated on one heap (e.g., by a call
+// from the .exe that results in a `new` inside the DLL) and deallocated on
+// another (e.g., by a `delete` call in the DLL that might resolve to the
+// .exe's runtime), it can lead to heap corruption and access violation
+// errors.
+//
+// These overloads ensure that `new AteClient` and `delete AteClient` always
+// use the memory management functions from the C++ runtime linked with this
+// DLL, preventing such issues.
+void* AteClient::operator new(size_t size) {
+  // Forward to the global new operator from the DLL's runtime.
+  return ::operator new(size);
+}
+
+void AteClient::operator delete(void* ptr) {
+  // Forward to the global delete operator from the DLL's runtime.
+  ::operator delete(ptr);
+}
+
 // Instantiates a client
 std::unique_ptr<AteClient> AteClient::Create(AteClient::Options options) {
-  LOG(INFO) << "AteClient::Create, options: "
-            << "pa: " << options.pa_socket
-            << ", enable_mtls: " << options.enable_mtls
-            << ", pem_cert_chain: " << options.pem_cert_chain
-            << ", pem_private_key: " << options.pem_private_key
-            << ", pem_root_certs: " << options.pem_root_certs
-            << ", sku_tokens: " << options.sku_tokens.size();
-
   // establish a grpc channel between the client (test program) and the targeted
   // provisioning appliance server:
   // 1. set the grpc channel properties (insecured by default, authenticated and
@@ -75,8 +92,14 @@ std::unique_ptr<AteClient> AteClient::Create(AteClient::Options options) {
     credentials = BuildCredentials(options);
   }
   // 2. create the grpc channel between the client and the targeted server
-  auto ate = absl::make_unique<AteClient>(ProvisioningApplianceService::NewStub(
-      grpc::CreateChannel(options.pa_socket, credentials)));
+  grpc::ChannelArguments args;
+  if (!options.load_balancing_policy.empty()) {
+    args.SetLoadBalancingPolicyName(options.load_balancing_policy);
+  }
+  auto channel =
+      grpc::CreateCustomChannel(options.pa_target, credentials, args);
+  auto ate = absl::make_unique<AteClient>(
+      ProvisioningApplianceService::NewStub(channel));
 
   return ate;
 }
@@ -171,7 +194,9 @@ Status AteClient::RegisterDevice(RegistrationRequest& request,
 // overloads operator<< for AteClient::Options objects printouts
 std::ostream& operator<<(std::ostream& os, const AteClient::Options& options) {
   // write obj to stream
-  os << std::endl << "options.pa_socket = " << options.pa_socket << std::endl;
+  os << std::endl << "options.pa_target = " << options.pa_target << std::endl;
+  os << "options.load_balancing_policy = " << options.load_balancing_policy
+     << std::endl;
   os << "options.enable_mtls = " << options.enable_mtls << std::endl;
   os << "options.pem_cert_chain = " << options.pem_cert_chain << std::endl;
   os << "options.pem_private_key = " << options.pem_private_key << std::endl;
