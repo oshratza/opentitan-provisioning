@@ -13,12 +13,14 @@ import (
 type AttrName string
 
 const (
-	AttrNameSeedSecHi         AttrName = "SeedSecHi"
-	AttrNameSeedSecLo                  = "SeedSecLo"
-	AttrNameWrappingKeyLabel           = "WrappingKeyLabel"
-	AttrNameWrappingMechanism          = "WrappingMechanism"
-	AttrNameWASKeyLabel                = "WASKeyLabel"
-	AttrNameWASDisable                 = "WASDisable"
+	AttrNameSeedSecHi                AttrName = "SeedSecHi"
+	AttrNameSeedSecLo                         = "SeedSecLo"
+	AttrNameWrappingKeyLabel                  = "WrappingKeyLabel"
+	AttrNameWrappingMechanism                 = "WrappingMechanism"
+	AttrNameWASKeyLabel                       = "WASKeyLabel"
+	AttrNameWASDisable                        = "WASDisable"
+	AttrNameCertChainDiceLeaf                 = "CertChainDiceLeaf"
+	AttrNameOwnerFirmwareBootMessage          = "OwnerFirmwareBootMessage"
 )
 
 // WrappingMechanism provides the wrapping method for symmetric keys.
@@ -36,6 +38,8 @@ type Config struct {
 	Sku           string            `yaml:"sku"`
 	SlotID        int               `yaml:"slotId"`
 	NumSessions   int               `yaml:"numSessions"`
+	CertCountX509 int               `yaml:"certCountX509"`
+	CertCountCWT  int               `yaml:"certCountCWT"`
 	SymmetricKeys []SymmetricKey    `yaml:"symmetricKeys"`
 	PrivateKeys   []PrivateKey      `yaml:"privateKeys"`
 	PublicKeys    []PublicKey       `yaml:"publicKeys"`

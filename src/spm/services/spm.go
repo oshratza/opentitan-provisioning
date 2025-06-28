@@ -10,16 +10,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"strings"
-	"encoding/asn1"
-	"math/big"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/lowRISC/opentitan-provisioning/src/ate"
+	"github.com/lowRISC/opentitan-provisioning/src/proto/validators"
 	"github.com/lowRISC/opentitan-provisioning/src/spm/services/se"
 	"github.com/lowRISC/opentitan-provisioning/src/spm/services/skucfg"
 	"github.com/lowRISC/opentitan-provisioning/src/spm/services/skumgr"
@@ -93,7 +95,7 @@ func NewSpmServer(opts Options) (pbs.SpmServiceServer, error) {
 	var config skucfg.Auth
 	err := utils.LoadConfig(opts.SPMConfigDir, opts.SPMAuthConfigFile, &config)
 	if err != nil {
-		return nil, fmt.Errorf("could not load sku auth config: %v", err)
+		return nil, fmt.Errorf("could not load sku auth config file %q: %v", opts.SPMAuthConfigFile, err)
 	}
 
 	session_token.NewSessionTokenInstance()
@@ -122,7 +124,7 @@ func (s *server) initSku(sku string) (string, error) {
 	}
 	_, err = s.skuManager.LoadSku(sku)
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize sku: %v", err)
+		return "", fmt.Errorf("failed to initialize sku %q: %v", sku, err)
 	}
 	return token, nil
 }
@@ -154,11 +156,11 @@ func (s *server) InitSession(ctx context.Context, request *pbp.InitSessionReques
 	var found bool
 	if s.authCfg != nil {
 		if auth, found = s.findSkuAuth(request.Sku); !found {
-			return nil, status.Errorf(codes.Internal, "unknown sku: %q", request.Sku)
+			return nil, status.Errorf(codes.NotFound, "unknown sku: %q", request.Sku)
 		}
 		err := utils.CompareHashAndPassword(auth.SkuAuth, request.SkuAuth)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "incorrect sku authentication %q", request.SkuAuth)
+			return nil, status.Errorf(codes.Unauthenticated, "incorrect sku authentication for sku %q", request.Sku)
 		}
 	} else {
 		return nil, status.Errorf(codes.Internal, "authentication config pointer is nil")
@@ -166,7 +168,7 @@ func (s *server) InitSession(ctx context.Context, request *pbp.InitSessionReques
 
 	token, err := s.initSku(request.Sku)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to initialize sku: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to initialize sku %q: %v", request.Sku, err)
 	}
 
 	return &pbp.InitSessionResponse{
@@ -213,7 +215,7 @@ func (s *server) DeriveTokens(ctx context.Context, request *pbp.DeriveTokensRequ
 		if p.WrapSeed {
 			wmech, err := sku.Config.GetAttribute(skucfg.AttrNameWrappingMechanism)
 			if err != nil {
-				return nil, status.Errorf(codes.Internal, "could not get wrapping method: %s", err)
+				return nil, status.Errorf(codes.Internal, "could not get wrapping method for sku %q: %v", request.Sku, err)
 			}
 			switch wmech {
 			case skucfg.WrappingMechanismRSAOAEP:
@@ -221,12 +223,12 @@ func (s *server) DeriveTokens(ctx context.Context, request *pbp.DeriveTokensRequ
 			case skucfg.WrappingMechanismRSAPKCS1:
 				params.Wrap = se.WrappingMechanismRSAPCKS
 			default:
-				return nil, status.Errorf(codes.Internal, "invalid wrapping method: %s", wmech)
+				return nil, status.Errorf(codes.Internal, "invalid wrapping method %q for sku %q", wmech, request.Sku)
 			}
 
 			wkl, err := sku.Config.GetAttribute(skucfg.AttrNameWrappingKeyLabel)
 			if err != nil {
-				return nil, status.Errorf(codes.Internal, "could not get wrapping key label: %s", err)
+				return nil, status.Errorf(codes.Internal, "could not get wrapping key label for sku %q: %v", request.Sku, err)
 			}
 			params.WrapKeyLabel = wkl
 		} else {
@@ -261,7 +263,7 @@ func (s *server) DeriveTokens(ctx context.Context, request *pbp.DeriveTokensRequ
 	// Generate the symmetric keys.
 	res, err := sku.SeHandle.GenerateTokens(keygenParams)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "could not generate symmetric key: %s", err)
+		return nil, status.Errorf(codes.Internal, "could not generate symmetric key for sku %q: %v", request.Sku, err)
 	}
 
 	tokens := make([]*pbp.Token, len(res))
@@ -327,7 +329,7 @@ func (s *server) GetCaSubjectKeys(ctx context.Context, request *pbp.GetCaSubject
 
 // GetStoredTokens retrieves a provisioned token from the SPM's HSM.
 func (s *server) GetStoredTokens(ctx context.Context, request *pbp.GetStoredTokensRequest) (*pbp.GetStoredTokensResponse, error) {
-	return nil, status.Errorf(codes.Internal, "SPM.GetStoredTokens - unimplemented")
+	return nil, status.Errorf(codes.Unimplemented, "SPM.GetStoredTokens - unimplemented")
 }
 
 func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequest) (*pbp.EndorseCertsResponse, error) {
@@ -350,7 +352,7 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 
 	wasLabel, err := sku.Config.GetAttribute(skucfg.AttrNameWASKeyLabel)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "could not get WAS key label: %s", err)
+		return nil, status.Errorf(codes.Internal, "could not get WAS key label for sku %q: %v", request.Sku, err)
 	}
 
 	// The WASDisable attribute will be removed in a future version of the spm.
@@ -368,12 +370,12 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 		LogOnly:     wasDisable == "true",
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "could not verify WAS signature: %s", err)
+		return nil, status.Errorf(codes.InvalidArgument, "could not verify WAS signature: %v", err)
 	}
 
 	rootCert, ok := sku.Certs["RootCA"]
 	if !ok {
-		return nil, status.Errorf(codes.Internal, "unable to find RootCA cert in SKU configuration")
+		return nil, status.Errorf(codes.Internal, "unable to find RootCA cert in SKU configuration for sku %q", request.Sku)
 	}
 
 	var certs []*pbp.CertBundle
@@ -394,12 +396,12 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 
 		keyLabel, err := sku.Config.GetUnsafeAttribute(kl)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "unable to find key label %q in SKU configuration: %v", kl, err)
+			return nil, status.Errorf(codes.InvalidArgument, "unable to find key label %q associated with KeyLabel %q in SKU configuration: %v", kl, bundle.KeyParams.KeyLabel, err)
 		}
 
 		caCert, ok := sku.Certs[kl]
 		if !ok {
-			return nil, status.Errorf(codes.Internal, "unable to find cert %q in SKU configuration", bundle.KeyParams.KeyLabel)
+			return nil, status.Errorf(codes.InvalidArgument, "unable to find cert %q associated with KeyLabel %q in SKU configuration", kl, bundle.KeyParams.KeyLabel)
 		}
 
 		switch key := bundle.KeyParams.Key.(type) {
@@ -416,7 +418,7 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 			}
 			cert, err := sku.SeHandle.EndorseCert(bundle.Tbs, params)
 			if err != nil {
-				return nil, status.Errorf(codes.Internal, "could not endorse cert: %v", err)
+				return nil, status.Errorf(codes.Internal, "could not endorse cert for %q: %v", bundle.KeyParams.KeyLabel, err)
 			}
 			certs = append(certs, &pbp.CertBundle{
 				KeyLabel: bundle.KeyParams.KeyLabel,
@@ -425,7 +427,7 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 				},
 			})
 		default:
-			return nil, status.Errorf(codes.Unimplemented, "unsupported key format")
+			return nil, status.Errorf(codes.Unimplemented, "unsupported key format: %T", key)
 		}
 	}
 	return &pbp.EndorseCertsResponse{
@@ -443,7 +445,7 @@ func (s *server) EndorseData(ctx context.Context, request *pbs.EndorseDataReques
 	// Retrieve signing key label.
 	keyLabel, err := sku.Config.GetUnsafeAttribute(request.KeyParams.KeyLabel)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "unable to find key label %q in SKU configuration: %v", request.KeyParams.KeyLabel, err)
+		return nil, status.Errorf(codes.InvalidArgument, "unable to find key label %q in SKU configuration: %v", request.KeyParams.KeyLabel, err)
 	}
 
 	// Sign data payload with the endorsement key.
@@ -456,28 +458,28 @@ func (s *server) EndorseData(ctx context.Context, request *pbs.EndorseDataReques
 		}
 		asn1Pubkey, asn1Sig, err = sku.SeHandle.EndorseData(request.Data, params)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "could not endorse data payload: %v", err)
+			return nil, status.Errorf(codes.Internal, "could not endorse data payload for sku %q: %v", request.Sku, err)
 		}
 		pub, err := x509.ParsePKIXPublicKey(asn1Pubkey)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "could not parse public key: %v", err)
+			return nil, status.Errorf(codes.Internal, "could not parse public key: %v, asn1: %x", err, asn1Pubkey)
 		}
 		ecdsaPubKey, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
-			return nil, status.Errorf(codes.Internal, "public key is not an ECDSA key")
+			return nil, status.Errorf(codes.Internal, "public key is not an ECDSA key, but %T", pub)
 		}
 
 		dataHash := sha256.Sum256(request.Data)
 		var sig struct{ R, S *big.Int }
 		_, err = asn1.Unmarshal(asn1Sig, &sig)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "could not unmarshal signature: %v", err)
+			return nil, status.Errorf(codes.Internal, "could not unmarshal signature: %v, asn1: %x", err, asn1Sig)
 		}
 
 		// Verify the signature.
 		verified := ecdsa.Verify(ecdsaPubKey, dataHash[:], sig.R, sig.S)
 		if !verified {
-			return nil, status.Errorf(codes.Internal, "could not verify signature")
+			return nil, status.Errorf(codes.Internal, "could not verify signature for hash %x", dataHash[:])
 		}
 	default:
 		return nil, status.Errorf(codes.Unimplemented, "unsupported key format")
@@ -486,5 +488,152 @@ func (s *server) EndorseData(ctx context.Context, request *pbs.EndorseDataReques
 	return &pbs.EndorseDataResponse{
 		Pubkey:    asn1Pubkey,
 		Signature: asn1Sig,
+	}, nil
+}
+
+func (s *server) VerifyDeviceData(ctx context.Context, request *pbs.VerifyDeviceDataRequest) (*pbs.VerifyDeviceDataResponse, error) {
+	log.Printf("SPM.VerifyDeviceDataRequest - Sku:%q", request.DeviceData.Sku)
+	sku, ok := s.skuManager.GetSku(request.DeviceData.Sku)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "unable to find sku %q. Try calling InitSession first", request.DeviceData.Sku)
+	}
+
+	// Unpack the perso blob.
+	persoBlob, err := ate.UnpackPersoBlob(request.DeviceData.PersoTlvData)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to unpack perso blob: %v", err)
+	}
+
+	// Validate the device ID.
+	if err := validators.ValidateDeviceId(request.DeviceData.DeviceId); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "device ID is invalid: %v", err)
+	}
+
+	rootCert, ok := sku.Certs["RootCA"]
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "unable to find RootCA cert in SKU configuration for sku %q", request.DeviceData.Sku)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(rootCert)
+
+	udsICA, ok := sku.Certs["SigningKey/Dice/v0"]
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "unable to find UDS ICA cert in SKU configuration for sku %q", request.DeviceData.Sku)
+	}
+	diceIntermediates := x509.NewCertPool()
+	diceIntermediates.AddCert(udsICA)
+
+	// EXT ICA is optional. It is used in non-DICE certificate chains.
+	extIntermediates := x509.NewCertPool()
+	extICA, ok := sku.Certs["SigningKey/Ext/v0"]
+	if ok {
+		extIntermediates.AddCert(extICA)
+	}
+
+	certChainDiceLeaf, err := sku.Config.GetUnsafeAttribute(skucfg.AttrNameCertChainDiceLeaf)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "unable to get cert chain dice leaf for sku %q: %v", request.DeviceData.Sku, err)
+	}
+
+	if len(persoBlob.X509Certs) != sku.Config.CertCountX509 {
+		x509CertLabels := []string{}
+		for _, cert := range persoBlob.X509Certs {
+			x509CertLabels = append(x509CertLabels, cert.KeyLabel)
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "expected %d X509 certificates, got %d: %v", sku.Config.CertCountX509, len(persoBlob.X509Certs), x509CertLabels)
+	}
+	if len(persoBlob.CwtCerts) != sku.Config.CertCountCWT {
+		cwtCertLabels := []string{}
+		for _, cert := range persoBlob.CwtCerts {
+			cwtCertLabels = append(cwtCertLabels, cert.KeyLabel)
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "expected %d CWT certificates, got %d: %v", sku.Config.CertCountCWT, len(persoBlob.CwtCerts), cwtCertLabels)
+	}
+
+	diceCerts := []*x509.Certificate{}
+	extCerts := []*x509.Certificate{}
+	extNames := []string{}
+	for _, cert := range persoBlob.X509Certs {
+		certObj, err := x509.ParseCertificate(cert.Cert)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "failed to parse certificate %q: %v", cert.KeyLabel, err)
+		}
+		certObj.UnhandledCriticalExtensions = nil
+
+		// DICE certificate chains are composed based on the certChainDiceLeaf configuration:
+		// - If certChainDiceLeaf is "UDS": The chain is Root CA -> UDS ICA -> UDS (leaf)
+		// - If certChainDiceLeaf is "CDI_0": The chain is Root CA -> UDS ICA -> UDS -> CDI_0 (leaf)
+		// - If certChainDiceLeaf is "CDI_1": The chain is Root CA -> UDS ICA -> UDS -> CDI_0 -> CDI_1 (leaf)
+		// The leaf certificate is added to diceCerts for verification, while intermediate
+		// certificates are added to the diceIntermediates pool.
+		switch cert.KeyLabel {
+		case "UDS":
+			if certChainDiceLeaf == "UDS" {
+				diceCerts = append(diceCerts, certObj)
+			} else {
+				diceIntermediates.AddCert(certObj)
+			}
+		case "CDI_0":
+			if certChainDiceLeaf == "CDI_0" {
+				diceCerts = append(diceCerts, certObj)
+			} else if certChainDiceLeaf == "CDI_1" {
+				diceIntermediates.AddCert(certObj)
+			}
+		case "CDI_1":
+			if certChainDiceLeaf == "CDI_1" {
+				diceCerts = append(diceCerts, certObj)
+			} else {
+				return nil, status.Errorf(codes.InvalidArgument, "CDI_1 certificate %q is not expected for this SKU %q", cert.KeyLabel, request.DeviceData.Sku)
+			}
+		default:
+			// If the certificate key label is not one of the DICE certificates,
+			// assume it is an EXT leaf certificate.
+			// The certificate chain is Root CA -> EXT ICA -> EXT (leaf)
+			extCerts = append(extCerts, certObj)
+			extNames = append(extNames, cert.KeyLabel)
+		}
+	}
+
+	// Verify the EXT certificate chains.
+	if len(extCerts) > 0 {
+		for i, ext := range extCerts {
+			_, err := ext.Verify(x509.VerifyOptions{
+				Roots:         roots,
+				Intermediates: extIntermediates,
+			})
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "%q certificate chain is invalid: %v", extNames[i], err)
+			}
+		}
+	}
+
+	// Verify the DICE certificate chain.
+	for _, cert := range diceCerts {
+		_, err := cert.Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: diceIntermediates,
+		})
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%q certificate chain is invalid: %v", cert.Subject.CommonName, err)
+		}
+	}
+
+	return &pbs.VerifyDeviceDataResponse{}, nil
+}
+
+// GetOwnerFwBootMessage retrieves the owner firmware boot message for a SKU.
+func (s *server) GetOwnerFwBootMessage(ctx context.Context, request *pbp.GetOwnerFwBootMessageRequest) (*pbp.GetOwnerFwBootMessageResponse, error) {
+	sku, ok := s.skuManager.GetSku(request.Sku)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "unable to find sku %q. Try calling InitSession first", request.Sku)
+	}
+
+	msg, err := sku.Config.GetAttribute(skucfg.AttrNameOwnerFirmwareBootMessage)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "could not fetch owner firmware boot message for sku %q: %v", request.Sku, err)
+	}
+
+	return &pbp.GetOwnerFwBootMessageResponse{
+		BootMessage: msg,
 	}, nil
 }

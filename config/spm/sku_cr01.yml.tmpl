@@ -5,6 +5,8 @@
 sku: "cr01"
 slotId: 0
 numSessions: 3
+certCountX509: 7
+certCountCWT: 0
 symmetricKeys:
   - name: eg-kdf-hisec-v0
   - name: eg-kdf-losec-v0
@@ -31,3 +33,5 @@ attributes:
     SigningKey/Dice/v0: cr01-ica-dice-key-p256-v0.priv
     SigningKey/Ext/v0: cr01-ica-ext-key-p256-v0.priv
     SigningKey/Identity/v0: spm-hsm-id-v0.priv
+    CertChainDiceLeaf: CDI_1
+    OwnerFirmwareBootMessage: "Key ladder state: Prod"

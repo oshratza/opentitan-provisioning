@@ -71,12 +71,14 @@ func (c *fakePbClient) BatchRegisterDevice(ctx context.Context, request *pbr.Bat
 // fakeSpmClient provides a fake client interface to the SPM server. Test
 // cases can set the fake responses as part of the test setup.
 type fakeSpmClient struct {
-	initSession         initSessionResponse
-	deriveSymmetricKeys deriveSymmetricKeysResponse
-	getStoredTokens     getStoredTokensResponse
-	getCaSubjectKeys    getCaSubjectKeysResponse
-	endorseCerts        endorseCertsResponse
-	endorseData         endorseDataResponse
+	initSession           initSessionResponse
+	deriveSymmetricKeys   deriveSymmetricKeysResponse
+	getStoredTokens       getStoredTokensResponse
+	getCaSubjectKeys      getCaSubjectKeysResponse
+	endorseCerts          endorseCertsResponse
+	endorseData           endorseDataResponse
+	verifyDeviceData      verifyDeviceDataResponse
+	getOwnerFwBootMessage getOwnerFwBootMessageResponse
 }
 
 type initSessionResponse struct {
@@ -109,6 +111,16 @@ type endorseDataResponse struct {
 	err      error
 }
 
+type verifyDeviceDataResponse struct {
+	response *pbs.VerifyDeviceDataResponse
+	err      error
+}
+
+type getOwnerFwBootMessageResponse struct {
+	response *pbp.GetOwnerFwBootMessageResponse
+	err      error
+}
+
 func (c *fakeSpmClient) InitSession(ctx context.Context, request *pbp.InitSessionRequest, opts ...grpc.CallOption) (*pbp.InitSessionResponse, error) {
 	return c.initSession.response, c.initSession.err
 }
@@ -131,6 +143,14 @@ func (c *fakeSpmClient) EndorseCerts(ctx context.Context, request *pbp.EndorseCe
 
 func (c *fakeSpmClient) EndorseData(ctx context.Context, request *pbs.EndorseDataRequest, opts ...grpc.CallOption) (*pbs.EndorseDataResponse, error) {
 	return c.endorseData.response, c.endorseData.err
+}
+
+func (c *fakeSpmClient) VerifyDeviceData(ctx context.Context, request *pbs.VerifyDeviceDataRequest, opts ...grpc.CallOption) (*pbs.VerifyDeviceDataResponse, error) {
+	return c.verifyDeviceData.response, c.verifyDeviceData.err
+}
+
+func (c *fakeSpmClient) GetOwnerFwBootMessage(ctx context.Context, request *pbp.GetOwnerFwBootMessageRequest, opts ...grpc.CallOption) (*pbp.GetOwnerFwBootMessageResponse, error) {
+	return c.getOwnerFwBootMessage.response, c.getOwnerFwBootMessage.err
 }
 
 func TestDeriveSymmetricKey(t *testing.T) {
@@ -164,7 +184,7 @@ func TestDeriveSymmetricKey(t *testing.T) {
 		{
 			// SPM errors are converted to code.Internal.
 			name:        "spm_error",
-			expCode:     codes.Internal,
+			expCode:     codes.InvalidArgument,
 			request:     &pbp.DeriveTokensRequest{},
 			spmResponse: &pbp.DeriveTokensResponse{},
 			spmError:    status.Errorf(codes.InvalidArgument, "invalid argument"),
@@ -224,7 +244,7 @@ func TestEndorseCerts(t *testing.T) {
 		{
 			// SPM errors are converted to code.Internal.
 			name:        "spm_error",
-			expCode:     codes.Internal,
+			expCode:     codes.InvalidArgument,
 			request:     &pbp.EndorseCertsRequest{},
 			spmResponse: &pbp.EndorseCertsResponse{},
 			spmError:    status.Errorf(codes.InvalidArgument, "invalid argument"),

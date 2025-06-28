@@ -39,16 +39,16 @@ use opentitanlib::test_utils::load_sram_program::{
 };
 use opentitanlib::uart::console::{ExitStatus, UartConsole};
 
-// NOTE: must match kDutSpiFrameSizeInBytes defined in src/ate/ate_api.h
+// NOTE: must match kDutTxMaxSpiFrameSizeInBytes defined in src/ate/ate_api.h
 // TODO(timothytrippel): look into using bindgen here to keep in sync
-const BUFFER_SIZE: usize = 2020;
+const DUT_TX_BUFFER_SIZE: usize = 2020;
 
-// NOTE: must match definition of dut_spi_frame_t defined in src/ate/ate_api.h
+// NOTE: must match definition of dut_tx_spi_frame_t defined in src/ate/ate_api.h
 // TODO(timothytrippel): look into using bindgen here to keep in sync
 #[repr(C)]
-pub struct DutSpiFrame {
-    pub payload: [u8; BUFFER_SIZE],
-    pub cursor: usize,
+pub struct DutTxSpiFrame {
+    pub payload: [u8; DUT_TX_BUFFER_SIZE],
+    pub size: usize,
 }
 
 #[no_mangle]
@@ -274,7 +274,7 @@ fn check_console_crc(json_str: &str, crc_str: &str) -> Result<()> {
 pub extern "C" fn OtLibConsoleRx(
     transport: *const TransportWrapper,
     sync_msg: *mut c_char,
-    spi_frames: *mut DutSpiFrame,
+    spi_frames: *mut DutTxSpiFrame,
     num_frames: *mut usize,
     skip_crc_check: bool,
     quiet: bool,
@@ -342,23 +342,24 @@ pub extern "C" fn OtLibConsoleRx(
             if !skip_crc_check {
                 check_console_crc(json_str, crc_str).expect("CRC check failed.");
             }
-            let num_frames_required = (json_str.len() + BUFFER_SIZE - 1) / BUFFER_SIZE;
+            let num_frames_required =
+                (json_str.len() + DUT_TX_BUFFER_SIZE - 1) / DUT_TX_BUFFER_SIZE;
             if *num_frames < num_frames_required {
                 panic!(
                         "Not enough frames ({} frames of size {} bytes) allocated to receive JSON string of length {}",
                         *num_frames,
-                        BUFFER_SIZE,
+                        DUT_TX_BUFFER_SIZE,
                         json_str.len()
                     )
             }
             for (i, spi_frame) in spi_frames.iter_mut().enumerate() {
                 if i < num_frames_required {
-                    let start = i * BUFFER_SIZE;
-                    let end = (start + BUFFER_SIZE).min(json_str.len());
+                    let start = i * DUT_TX_BUFFER_SIZE;
+                    let end = (start + DUT_TX_BUFFER_SIZE).min(json_str.len());
                     let chunk = &json_str.as_bytes()[start..end];
                     let chunk_len = chunk.len();
                     spi_frame.payload[..chunk_len].copy_from_slice(chunk);
-                    spi_frame.cursor = chunk_len;
+                    spi_frame.size = chunk_len;
                 } else {
                     break;
                 }
@@ -537,4 +538,70 @@ pub extern "C" fn OtLibLcTransition(
         .unwrap()
         .remove()
         .expect("Could not remove bootstrap straps.");
+}
+
+#[no_mangle]
+pub extern "C" fn OtLibCheckTransportImgBoot(
+    transport: *const TransportWrapper,
+    owner_fw_boot_msg: *mut c_char,
+    timeout_ms: u64,
+) {
+    // SAFETY: The transport wrapper pointer passed from C side should be the pointer returned by
+    // the call to `OtLibFpgaTransportInit(...)` above.
+    let transport: &TransportWrapper = unsafe { &*transport };
+
+    // Unpack boot message string.
+    // SAFETY: The boot message string must be set by the caller and be valid.
+    let owner_fw_boot_msg_cstr = unsafe { CStr::from_ptr(owner_fw_boot_msg) };
+    let owner_fw_boot_msg_in = owner_fw_boot_msg_cstr.to_str().unwrap();
+
+    let timeout = Duration::from_millis(timeout_ms);
+
+    // Reset the DUT and get the UART console handle.
+    transport
+        .reset_target(timeout, true)
+        .expect("Failed to reset the DUT.");
+    let uart_console = transport
+        .uart("console")
+        .expect("Unable to instantiate the UART console.");
+
+    // Wait for a successful ROM_EXT boot message.
+    println!("Waiting for ROM_EXT to boot ...");
+    let _ = UartConsole::wait_for(&*uart_console, r"(?:\n| )ROM_EXT[: ](.*)\r\n", timeout)
+        .expect("Failed to boot the ROM_EXT.");
+    println!("ROM_EXT has booted.");
+
+    // CAUTION: This error message should match the one in
+    //   @lowrisc_opentitan//sw/device/silicon_creator/lib/cert/dice_chain.c.
+    let rom_ext_cert_failure_msg = r"UDS certificate not valid";
+    let boot_failure_msg = r"BFV:.*\r\n";
+    let boot_errors_text = format!(r"{}|{}", rom_ext_cert_failure_msg, boot_failure_msg);
+    let boot_text = match owner_fw_boot_msg_in {
+        "" => format!(r"(?s)({boot_errors_text})"),
+        x => format!(r"(?s)({boot_errors_text}|{x})"),
+    };
+    println!("Boot Text: {}", boot_text);
+    println!("Waiting for Owner Firmware to boot ...");
+    let result = UartConsole::wait_for(&*uart_console, boot_text.as_str(), timeout);
+    match result {
+        Ok(captures) => {
+            if captures[0] == *rom_ext_cert_failure_msg {
+                println!("ROM_EXT detected invalid UDS certificate!");
+                panic!("ROM_EXT detected invalid UDS certificate!");
+            }
+            if captures[0].starts_with("BFV:") {
+                println!("Boot fault detected!");
+                panic!("Boot fault detected!");
+            }
+        }
+        Err(e) => {
+            if owner_fw_boot_msg_in == "" && e.to_string().contains("Timed Out") {
+                // Error message not found after timeout. This is the expected behavior.
+            } else {
+                // An unexpected error occurred while waiting for the console output.
+                panic!("{}", e);
+            }
+        }
+    }
+    println!("Owner Firmware has booted.");
 }

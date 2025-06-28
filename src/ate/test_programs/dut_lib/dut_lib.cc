@@ -26,7 +26,7 @@ void OtLibBootstrap(void* transport, const char* bin);
 void OtLibConsoleWaitForRx(void* transport, const char* msg,
                            uint64_t timeout_ms);
 void OtLibConsoleRx(void* transport, const char* sync_msg,
-                    dut_spi_frame_t* spi_frames, size_t* num_frames,
+                    dut_tx_spi_frame_t* spi_frames, size_t* num_frames,
                     bool skip_crc_check, bool quiet, uint64_t timeout_ms);
 void OtLibConsoleTx(void* transport, const char* sync_msg,
                     const uint8_t* spi_frame, size_t spi_frame_size,
@@ -35,6 +35,8 @@ void OtLibResetAndLock(void* transport, const char* openocd);
 void OtLibLcTransition(void* transport, const char* openocd,
                        const uint8_t* token, size_t token_size,
                        uint32_t target_lc_state);
+void OtLibCheckTransportImgBoot(void* transport, const char* owner_fw_boot_msg,
+                                uint64_t timeout_ms);
 }
 
 std::unique_ptr<DutLib> DutLib::Create(const std::string& fpga) {
@@ -65,7 +67,7 @@ void DutLib::DutConsoleWaitForRx(const char* msg, uint64_t timeout_ms) {
 }
 
 void DutLib::DutConsoleRx(const std::string& sync_msg,
-                          dut_spi_frame_t* spi_frames, size_t* num_frames,
+                          dut_tx_spi_frame_t* spi_frames, size_t* num_frames,
                           bool skip_crc_check, bool quiet,
                           uint64_t timeout_ms) {
   LOG(INFO) << "in DutLib::DutConsoleRx";
@@ -90,6 +92,12 @@ void DutLib::DutLcTransition(const std::string& openocd, const uint8_t* token,
   LOG(INFO) << "in DutLib::DutLcTransition";
   OtLibLcTransition(transport_, openocd.c_str(), token, token_size,
                     target_lc_state);
+}
+
+void DutLib::DutCheckTransportImgBoot(const char* owner_fw_boot_msg,
+                                      uint64_t timeout_ms) {
+  LOG(INFO) << "in DutLib::DutCheckTransportImgBoot";
+  OtLibCheckTransportImgBoot(transport_, owner_fw_boot_msg, timeout_ms);
 }
 
 }  // namespace test_programs
