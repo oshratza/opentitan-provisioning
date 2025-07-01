@@ -42,7 +42,7 @@ func StartRegistryBuffer(registryBufferAddress string, enableTLS bool, caRootCer
 
 	conn, err := grpc.Dial(registryBufferAddress, opts, grpc.WithBlock())
 	if err != nil {
-		log.Printf("In Registry Shim - faled dialing %v", registryBufferAddress)
+		log.Printf("In Registry Shim - failed dialing %v", registryBufferAddress)
 		return err
 	}
 
@@ -143,7 +143,6 @@ func ConvertPaToRegistryBuffer(request *papb.RegistrationRequest, otRecord *rrpb
 	registryReq := &pbr.RegistrationRequest{
 		DeviceRecord: &deviceRecord,
 	}
-	log.Printf("Converted RegistrationRequest: %+v", registryReq)
 
 	return registryReq, nil
 }
