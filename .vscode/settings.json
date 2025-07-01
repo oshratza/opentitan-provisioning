@@ -1,5 +1,6 @@
 {
-    "go.goroot": "${workspaceFolder}/bazel-${workspaceFolderBasename}/external/go_sdk",
+    "go.goroot": "C:\\Program Files\\Go",
+    "go.gopath": "C:\\Users\\ozamir\\go",
     "go.toolsEnvVars": {
       "GOPACKAGESDRIVER": "${workspaceFolder}/util/gopackagesdriver.sh"
     },
@@ -33,4 +34,29 @@
     "go.buildOnSave": "off",
     "go.lintOnSave": "off",
     "go.vetOnSave": "off",
-  }
+    "go.inferGopath": false,
+    "go.toolsEnvVars": {
+        "GO111MODULE": "on"
+    },	
+    "security.allowedUNCHosts": [
+        "tanap1"
+    ],
+    "security.workspace.trust.untrustedFiles": "open",
+        "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/**"
+    ],
+    "C_Cpp.default.defines": [],
+    "C_Cpp.default.compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.default.cStandard": "c11",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+	"editor.fontSize": 16,
+    "editor.renderWhitespace": "all",
+    "editor.inlineSuggest.enabled": true,
+    "workbench.sideBar.location": "right",
+    "workbench.colorTheme": "Default High Contrast Light"
+	"workbench.editor.enablePreview": false,
+	"workbench.editor.enablePreviewFromQuickOpen": false,
+    "diffEditor.ignoreTrimWhitespace": false,
+  }  }
