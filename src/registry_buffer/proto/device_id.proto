@@ -1,0 +1,240 @@
+// Copyright lowRISC contributors.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+// Message/enum definitions for DeviceId, Certificate and DeviceData
+// messages.  These definitions are shared by all services.
+//
+// See "Device ID Provisioning >> Device Registration"[1] which points
+// at "Identities and Root Keys >> Device Identifier"[2].
+//
+// [1] https://docs.google.com/document/d/1dE7vR791Atp7Wu7Ss90K1MvdyoroouSHPdq_RXQ2R8I#bookmark=id.n9feo7yvyhle
+//     FIXME: Replace above with a pointer to markdown TBD.
+// [2] https://docs.opentitan.org/doc/security/specs/identities_and_root_keys#device-identifier
+
+syntax = "proto3";
+
+option go_package = "device_id_go_pb";
+package device_id;
+
+// DeviceLifeCycle allow to manage the state of the device as it is being
+// manufactured and provisioned for shipment and also are used to encode the
+// device ownership state
+enum DeviceLifeCycle {
+  // UNKNOWN (zero-value) is the default -- not valid in messages.
+  DEVICE_LIFE_CYCLE_UNKNOWN = 0;
+  // RAW
+  DEVICE_LIFE_CYCLE_RAW = 1;
+  // TEST_LOCKED
+  DEVICE_LIFE_CYCLE_TEST_LOCKED = 2;
+  // TEST_UNLOCKED
+  DEVICE_LIFE_CYCLE_TEST_UNLOCKED = 3;
+  // DEV
+  // This device must not be used in a production environment.  In
+  // particular (possibly among other things), devices marked with
+  // `DEV` may make secrets available for development purposes that
+  // would be bad to make available in production.
+  DEVICE_LIFE_CYCLE_DEV = 4;
+  // PROD
+  // This device can be used in a production environment.
+  DEVICE_LIFE_CYCLE_PROD = 5;
+  // PROD_END
+  DEVICE_LIFE_CYCLE_PROD_END = 6;
+  // RMA
+  DEVICE_LIFE_CYCLE_RMA = 7;
+  // SCRAP state means that all functions and CPU execution are disabled.
+  DEVICE_LIFE_CYCLE_SCRAP = 8;
+  // OWNERSHIP_UNLOCED
+  DEVICE_LIFE_CYCLE_OWNERSHIP_UNLOCED = 9;
+  // OWNERSHIP_UNLOCED
+  DEVICE_LIFE_CYCLE_OWNERSHIP_LOCED = 10;
+  // INVALID
+  DEVICE_LIFE_CYCLE_INVALID = 11;
+  // EOL
+  DEVICE_LIFE_CYCLE_EOL = 12;
+}
+
+// Identifies a Root-of-Trust chip manufacturer.
+//
+// TODO(lowRISC/ot-provisioning#14): Fill these in!
+enum SiliconCreator {
+  // UNSPECIFIED (zero-value) is the default -- not valid in messages.
+  SILICON_CREATOR_UNSPECIFIED = 0;
+
+  // For test.
+  SILICON_CREATOR_TEST = 1;
+
+  // BMC identifier
+  SILICON_CREATOR_NUVOTON = 0x1050;
+}
+
+// specify the type of the public device id format.
+enum DeviceIdPubFormat {
+  // default -- not valid in messages
+  DEVICE_ID_PUB_FORMAT_UNKNOWN = 0;
+
+  DEVICE_ID_PUB_FORMAT_DER = 1;
+
+  DEVICE_ID_PUB_FORMAT_PEM = 2;
+
+  DEVICE_ID_PUB_FORMAT_RAW_ECDSA = 3;  // X & Y
+}
+
+// Device Type. Encodes Manufacturer / Product Line.
+message DeviceType {
+  // Silicon Creator (Root-of-Trust chip manufacturer).
+  //
+  // Enum -- deserializes into 16 bits (see "Identities and Root Keys
+  // >> Device Identifier"[1]).  (Size is enforced at a higher level,
+  // not by protobuf.)
+  //
+  // [1] https://docs.opentitan.org/doc/security/specs/identities_and_root_keys#device-identifier
+  SiliconCreator silicon_creator = 1;
+
+  // Per-SiliconCreator product-line identifier.
+  //
+  // TODO: Where are the values that this field can take defined?
+  //
+  // TODO: Do different hardware revisions get different
+  // product_identifiers?
+  //
+  // Deserializes into 16 bits (see "Identities and Root Keys >>
+  // Device Identifier"[1]).  (Size is enforced at a higher level, not
+  // by protobuf.)
+  //
+  // [1] https://docs.opentitan.org/doc/security/specs/identities_and_root_keys#device-identifier
+  uint32 product_identifier = 2;
+}
+
+// Identifies the device (Root-of-Trust chip) itself.
+//
+// TODO: Better name?
+message HardwareOrigin {
+  DeviceType device_type = 1;
+
+  // A unique number for a given `SiliconCreator`/`ProductIdentifier`
+  // -- every device gets its own one of these.
+  fixed64 device_identification_number = 2;
+};
+
+// A Device Identifier.
+//
+// The contents of this message are intended to be used as a globally
+// unique identifier for a given Root-of-Trust chip.
+message DeviceId {
+  // Identifies the silicon.
+  HardwareOrigin hardware_origin = 1;
+  // Silicon Creator can use this field for anything they want.
+  //
+  // 128 bits (size is enforced at a higher level, not by protobuf).
+  bytes sku_specific = 2;
+  // This CRC covers the entire (deserialized) DeviceId object (see
+  // "Device ID Provisioning >> Device Registration"[1]).
+  //
+  // [1] https://docs.google.com/document/d/1dE7vR791Atp7Wu7Ss90K1MvdyoroouSHPdq_RXQ2R8I#bookmark=id.n9feo7yvyhle
+  //     FIXME: Replace above with a pointer to markdown TBD.
+  //
+  // crc32 IEEE802.3
+  // CRC is calculated at a higher level, not
+  // by protobuf.
+  fixed32 crc32 = 3;  // -- see "Device ID Provisioning"
+}
+
+// A Certificate.
+message Certificate {
+  // Opaque bytes.
+  //
+  // Protobuf knows nothing about internal structure of this blob;
+  // that's handled at a higher level, not by protobuf.
+  // See https://pkg.go.dev/crypto/x509#CreateCertificate for details.
+  bytes blob = 1;
+}
+
+// A Device ID Public.
+message DeviceIdPub {
+  // specify the type of the public device id format.
+  DeviceIdPubFormat format = 1;
+  // Opaque bytes.
+  //
+  // Protobuf knows nothing about internal structure of this blob;
+  // that's handled at a higher level, not by protobuf.
+  bytes blob = 2;
+}
+
+// The state of the device.
+enum DeviceState {
+  // UNKNOWN (zero-value) is the default -- not valid in messages.
+  DEVICE_STATE_UNKNOWN = 0;
+  // The device has been provisioned and the
+  // registration data is valid.
+  DEVICE_STATE_PROVISIONED = 1;
+  // The device has been provisioned and provisioning data read
+  // by the manifest reporting service
+  DEVICE_STATE_PROV_READ = 2;
+  // The device has been provisioned and provisioning data
+  // reported successfully by the manifest reporting service
+  DEVICE_STATE_PROV_REPORT = 3;
+  // The device failed provisioning and the data is
+  // invalid.
+  DEVICE_STATE_INVALID = 4;
+  // The manufacturer revoked the provisioning data
+  // associated with this device.
+  DEVICE_STATE_REVOKED = 5;
+}
+
+// A metadata
+message Metadata {
+  DeviceState state = 1;
+  // Time at which the device record was created.
+  uint64 create_time_ms = 2;
+  // Time at which the device was last updated.
+  uint64 update_time_ms = 3;
+  // ATE unique identifier.
+  string ate_id = 4;
+  // ATE unstructured data associated with the device.
+  string ate_raw = 5;
+  // Year
+  uint32 year = 6;
+  // Week number.
+  uint32 week = 7;
+  // lot number.
+  uint32 lot_num = 8;
+  // Wafer ID.
+  uint32 wafer_id = 9;
+  // X position.
+  uint32 x = 10;
+  // Y position.
+  uint32 y = 11;
+}
+
+// Device Data for a given device.
+//
+// The value for which DeviceId is the key.
+message DeviceData {
+  // Device ID pub that associated with this device.
+  repeated DeviceIdPub device_id_pub = 1;
+  // 256-2048 bytes (SKU-specific -- see "Device ID Provisioning >>
+  // Device Registration"[1]).
+  //
+  // [1] https://docs.google.com/document/d/1dE7vR791Atp7Wu7Ss90K1MvdyoroouSHPdq_RXQ2R8I#bookmark=id.n9feo7yvyhle
+  //     FIXME: Replace above with a pointer to markdown TBD.
+  bytes payload = 2;
+
+  bytes next_owner_keys = 3;
+
+  // Device life cycle of this device.
+  DeviceLifeCycle device_life_cycle = 4;
+
+  // see "Device ID Provisioning Device Registration"[1].
+  Metadata metadata = 5;
+}
+
+// Combined device ID and data.
+message DeviceRecord {
+  // SKU name.
+  string sku = 1;
+  // Device unique identifier.
+  DeviceId id = 2;
+  // Device data.
+  DeviceData data = 3;
+}

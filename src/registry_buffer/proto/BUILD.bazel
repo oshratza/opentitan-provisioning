@@ -1,0 +1,41 @@
+# Copyright lowRISC contributors (OpenTitan project).
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenTitan provisioning registry/buffer server/client -- protobuf messages / validators
+# ===================================================================================
+
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+proto_library(
+    name = "device_id_proto",
+    srcs = ["device_id.proto"],
+)
+
+go_proto_library(
+    name = "device_id_go_pb",
+    importpath = "github.com/lowRISC/opentitan-provisioning/src/registry_buffer/proto/device_id_go_pb",
+    proto = ":device_id_proto",
+)
+
+proto_library(
+    name = "registry_buffer_proto",
+    srcs = ["registry_buffer.proto"],
+    deps = [":device_id_proto"],
+)
+
+go_proto_library(
+    name = "registry_buffer_go_pb",
+    compilers = ["@io_bazel_rules_go//proto:go_grpc"],
+    importpath = "github.com/lowRISC/opentitan-provisioning/src/registry_buffer/proto/registry_buffer_go_pb",
+    proto = ":registry_buffer_proto",
+    deps = [
+        ":device_id_go_pb",
+    ],
+)
+
+

@@ -1,0 +1,24 @@
+// Registry/buffer service definition.
+
+syntax = "proto3";
+
+option go_package = "registry_buffer_go_bp";
+package registry_buffer;
+
+import "src/registry_buffer/proto/device_id.proto";
+
+// Device Registration request.
+message RegistrationRequest {
+  // Device record. Required.
+  device_id.DeviceRecord device_record = 1;
+}
+
+// Device Registration reponse.
+message RegistrationResponse {}
+
+// RegisterDevice registers a new device record.
+service RegistryBufferService {
+  // Registers a device.
+  rpc RegisterDevice(RegistrationRequest) returns (RegistrationResponse) {}
+}
+
