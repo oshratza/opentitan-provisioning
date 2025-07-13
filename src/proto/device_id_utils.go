@@ -15,7 +15,7 @@ const (
 
 // Converts a DeviceId proto object into a hex string.
 func DeviceIdToHexString(di *dpb.DeviceId) string {
-	return fmt.Sprintf("0x%x%08x%016x%08x%08x",
+	return fmt.Sprintf("0x%032x%08x%016x%04x%04x",
 		di.SkuSpecific,
 		ReservedDeviceIdField,
 		uint64(di.HardwareOrigin.DeviceIdentificationNumber),
