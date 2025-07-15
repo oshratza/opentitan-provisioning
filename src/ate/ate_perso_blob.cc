@@ -445,10 +445,18 @@ DLLEXPORT int UnpackPersoBlob(
     remaining -= obj_size;
   }
 
-  if (signature->raw[0] == 0) {
+  bool all_zero = true;
+  for (size_t i = 0; i < sizeof(signature->raw); ++i) {
+    if (signature->raw[i] != 0) {
+      all_zero = false;
+      break;
+    }
+  }
+  if (all_zero) {
     LOG(ERROR) << "No WAS TBS HMAC found in the blob";
     return -1;
   }
+
   if (*tbs_cert_count == 0) {
     LOG(ERROR) << "No TBS certificates found in the blob";
     return -1;
