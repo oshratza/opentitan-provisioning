@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc"
@@ -82,10 +83,12 @@ func RegisterDevice(ctx context.Context, request *papb.RegistrationRequest, endo
 	}
 
 	// Send record to the registry_buffer (the buffering front end of the registry service).
+	log.Printf("In NVT RegistryShim before RegisterDevice, time is %q", time.Now().Format("15:04:05.000"))
 	_, err = registryClient.RegisterDevice(ctx, rbRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "RegisterDevice returned error: %v", err)
 	}
+	log.Printf("In NVT RegistryShim after RegisterDevice, time is %q", time.Now().Format("15:04:05.000"))
 
 	return &papb.RegistrationResponse{}, nil
 }

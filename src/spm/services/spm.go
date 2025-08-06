@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -262,10 +263,12 @@ func (s *server) DeriveTokens(ctx context.Context, request *pbp.DeriveTokensRequ
 	}
 
 	// Generate the symmetric keys.
+	log.Printf("In SPM.DeriveTokens before calling GenerateTokens, time is %q", time.Now().Format("15:04:05.000"))
 	res, err := sku.SeHandle.GenerateTokens(keygenParams)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "could not generate symmetric key for sku %q: %v", request.Sku, err)
 	}
+	log.Printf("In SPM.DeriveTokens after calling GenerateTokens, time is %q", time.Now().Format("15:04:05.000"))
 
 	tokens := make([]*pbp.Token, len(res))
 	for i, r := range res {
@@ -362,6 +365,7 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 		wasDisable = "false"
 	}
 
+	log.Printf("In SPM.EndorseCerts before calling VerifyWASSignature, time is %q", time.Now().Format("15:04:05.000"))
 	err = sku.SeHandle.VerifyWASSignature(se.VerifyWASParams{
 		Signature:   request.Signature,
 		Data:        wasData,
@@ -373,6 +377,7 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "could not verify WAS signature: %v", err)
 	}
+	log.Printf("In SPM.EndorseCerts after calling VerifyWASSignature, time is %q", time.Now().Format("15:04:05.000"))
 
 	rootCert, ok := sku.Certs["RootCA"]
 	if !ok {
@@ -417,10 +422,12 @@ func (s *server) EndorseCerts(ctx context.Context, request *pbp.EndorseCertsRequ
 					rootCert,
 				},
 			}
+			log.Printf("In SPM.EndorseCerts before calling EndorseCert, time is %q", time.Now().Format("15:04:05.000"))
 			cert, err := sku.SeHandle.EndorseCert(bundle.Tbs, params)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "could not endorse cert for %q: %v", bundle.KeyParams.KeyLabel, err)
 			}
+			log.Printf("In SPM.EndorseCerts after calling EndorseCert, time is %q", time.Now().Format("15:04:05.000"))
 			certs = append(certs, &pbp.CertBundle{
 				KeyLabel: bundle.KeyParams.KeyLabel,
 				Cert: &pbc.Certificate{
@@ -457,10 +464,12 @@ func (s *server) EndorseData(ctx context.Context, request *pbs.EndorseDataReques
 			KeyLabel:           keyLabel,
 			SignatureAlgorithm: ecdsaSignatureAlgorithmFromHashType(key.EcdsaParams.HashType),
 		}
+		log.Printf("In SPM.EndorseData before calling EndorseData, time is %q", time.Now().Format("15:04:05.000"))
 		asn1Pubkey, asn1Sig, err = sku.SeHandle.EndorseData(request.Data, params)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "could not endorse data payload for sku %q: %v", request.Sku, err)
 		}
+		log.Printf("In SPM.EndorseData after calling EndorseData, time is %q", time.Now().Format("15:04:05.000"))
 		pub, err := x509.ParsePKIXPublicKey(asn1Pubkey)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "could not parse public key: %v, asn1: %x", err, asn1Pubkey)
@@ -478,10 +487,12 @@ func (s *server) EndorseData(ctx context.Context, request *pbs.EndorseDataReques
 		}
 
 		// Verify the signature.
+		log.Printf("In SPM.EndorseData before calling Verify, time is %q", time.Now().Format("15:04:05.000"))
 		verified := ecdsa.Verify(ecdsaPubKey, dataHash[:], sig.R, sig.S)
 		if !verified {
 			return nil, status.Errorf(codes.Internal, "could not verify signature for hash %x", dataHash[:])
 		}
+		log.Printf("In SPM.EndorseData after calling Verify, time is %q", time.Now().Format("15:04:05.000"))
 	default:
 		return nil, status.Errorf(codes.Unimplemented, "unsupported key format")
 	}
@@ -597,6 +608,7 @@ func (s *server) VerifyDeviceData(ctx context.Context, request *pbs.VerifyDevice
 
 	// Verify the EXT certificate chains.
 	if len(extCerts) > 0 {
+		log.Printf("In SPM.VerifyDeviceData before calling Verify EXT chain, time is %q", time.Now().Format("15:04:05.000"))
 		for i, ext := range extCerts {
 			_, err := ext.Verify(x509.VerifyOptions{
 				Roots:         roots,
@@ -606,9 +618,11 @@ func (s *server) VerifyDeviceData(ctx context.Context, request *pbs.VerifyDevice
 				return nil, status.Errorf(codes.InvalidArgument, "%q certificate chain is invalid: %v", extNames[i], err)
 			}
 		}
+		log.Printf("In SPM.VerifyDeviceData after calling Verify EXT chain, time is %q", time.Now().Format("15:04:05.000"))
 	}
 
 	// Verify the DICE certificate chain.
+	log.Printf("In SPM.VerifyDeviceData before calling Verify DICE chain, time is %q", time.Now().Format("15:04:05.000"))
 	for _, cert := range diceCerts {
 		_, err := cert.Verify(x509.VerifyOptions{
 			Roots:         roots,
@@ -618,6 +632,7 @@ func (s *server) VerifyDeviceData(ctx context.Context, request *pbs.VerifyDevice
 			return nil, status.Errorf(codes.InvalidArgument, "%q certificate chain is invalid: %v", cert.Subject.CommonName, err)
 		}
 	}
+	log.Printf("In SPM.VerifyDeviceData after calling Verify DICE chain, time is %q", time.Now().Format("15:04:05.000"))
 
 	// Verify the hash of all certificates written to flash on the DUT.
 	// Note: we skip the hash check, and print a warning, if the expected hash is all zeros.

@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/miekg/pkcs11"
 )
@@ -120,16 +121,23 @@ type object struct {
 
 // find finds all objects visible to this session with the given attributes.
 func (s *Session) find(attrs ...*pkcs11.Attribute) ([]object, error) {
+	fmt.Printf("I am in object.find()..")
+	start := time.Now()
 	if err := s.tok.m.Raw().FindObjectsInit(s.raw, attrs); err != nil {
 		return nil, newError(err, "could not begin search for objects")
 	}
+	fmt.Printf("FindObjectsInit took: %v\n", time.Since(start))
 
 	var objs []object
+	findStart := time.Now()
 	for i := 0; ; i++ {
+		iterStart := time.Now()
 		raw, _, err := s.tok.m.Raw().FindObjects(s.raw, 32)
 		if err != nil {
 			return nil, newError(err, "could not continue search for objects after %d iterations", i)
 		}
+		fmt.Printf("FindObjects iteration %d took: %v\n", i, time.Since(iterStart))
+
 		if len(raw) == 0 {
 			break
 		}
@@ -138,10 +146,13 @@ func (s *Session) find(attrs ...*pkcs11.Attribute) ([]object, error) {
 			objs = append(objs, object{s, o})
 		}
 	}
+	fmt.Printf("Total FindObjects took: %v\n", time.Since(findStart))
 
+	finalStart := time.Now()
 	if err := s.tok.m.Raw().FindObjectsFinal(s.raw); err != nil {
 		return nil, newError(err, "could not complete search for objects")
 	}
+	fmt.Printf("FindObjectsFinal took: %v\n", time.Since(finalStart))
 
 	return objs, nil
 }

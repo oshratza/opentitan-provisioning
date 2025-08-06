@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
@@ -30,6 +31,9 @@ type sessionQueue struct {
 
 	// s is an HSM session channel.
 	s chan *pk11.Session
+
+	// Debug tracking
+	totalUsage int
 }
 
 // newSessionQueue creates a session queue with a channel of depth `num`.
@@ -61,8 +65,15 @@ func (q *sessionQueue) insert(s *pk11.Session) error {
 // Note: failing to call the release function can result into deadlocks
 // if the queue remains empty after calling the `insert` function.
 func (q *sessionQueue) getHandle() (*pk11.Session, func()) {
+	fmt.Printf("I am in se_pk11.go, getHandle()\n")
 	s := <-q.s
+	q.totalUsage++
+
+	// Debug: Log session usage and session pointer for tracking
+	log.Printf("DEBUG: Session usage #%d, session pointer: %p", q.totalUsage, s)
+
 	release := func() {
+		log.Printf("DEBUG: Releasing session pointer: %p", s)
 		q.insert(s)
 	}
 	return s, release
@@ -152,6 +163,7 @@ func openSessions(soPath, hsmPW string, tokSlot, numSessions int) (*sessionQueue
 
 // GetKeyIDByLabel returns the object ID from a given label
 func GetKeyIDByLabel(session *pk11.Session, classKeyType pk11.ClassAttribute, label string) ([]byte, error) {
+	fmt.Printf("I am in se_pkcs11.GetKeyIDByLabel()\n")
 	keyObj, err := session.FindKeyByLabel(classKeyType, label)
 	if err != nil {
 		return nil, err
@@ -238,6 +250,7 @@ func (h *HSM) VerifySession() error {
 }
 
 func (h *HSM) GenerateTokens(params []*TokenParams) ([]TokenResult, error) {
+	fmt.Printf("I am in se_pk11.GenerateTokens()\n")
 	session, release := h.sessions.getHandle()
 	defer release()
 
@@ -281,6 +294,12 @@ func (h *HSM) GenerateTokens(params []*TokenParams) ([]TokenResult, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to generate random key: %v", err)
 			}
+			cleanup_seed := func() {
+				if err := seed.Destroy(); err != nil {
+					log.Printf("failed to destroy generated key: %v", err)
+				}
+			}
+			defer cleanup_seed()
 		default:
 			return nil, fmt.Errorf("unsupported key type: %v", p.Type)
 		}
@@ -396,28 +415,38 @@ func hashFromSignatureAlgorithm(alg x509.SignatureAlgorithm) (crypto.Hash, error
 }
 
 func (h *HSM) EndorseCert(tbs []byte, params EndorseCertParams) ([]byte, error) {
+	var keyStart time.Time
+
+	keyStart = time.Now()
 	session, release := h.sessions.getHandle()
 	defer release()
+	log.Printf("EndorseCert->getHandle: %v", time.Since(keyStart))
 
+	keyStart = time.Now()
 	keyID, err := GetKeyIDByLabel(session, pk11.ClassPrivateKey, params.KeyLabel)
 	if err != nil {
 		return nil, fmt.Errorf("fail to find key with label: %q, error: %v", params.KeyLabel, err)
 	}
+	log.Printf("EndorseCert->GetKeyIDByLabel: %v", time.Since(keyStart))
 
+	keyStart = time.Now()
 	key, err := session.FindPrivateKey(keyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find key object %q: %v", keyID, err)
 	}
+	log.Printf("EndorseCert->FindPrivateKey: %v", time.Since(keyStart))
 
 	hash, err := hashFromSignatureAlgorithm(params.SignatureAlgorithm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get hash from signature algorithm: %v", err)
 	}
 
+	keyStart = time.Now()
 	rb, sb, err := key.SignECDSA(hash, tbs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign: %v", err)
 	}
+	log.Printf("EndorseCert->SignECDSA: %v", time.Since(keyStart))
 
 	// Encode the signature as ASN.1 DER.
 	var sig struct{ R, S *big.Int }
@@ -464,6 +493,8 @@ func (h *HSM) EndorseCert(tbs []byte, params EndorseCertParams) ([]byte, error) 
 	for _, ca := range params.Intermediates {
 		intermediates.AddCert(ca)
 	}
+
+	keyStart = time.Now()
 	_, err = certObj.Verify(x509.VerifyOptions{
 		Roots:         roots,
 		Intermediates: intermediates,
@@ -471,32 +502,49 @@ func (h *HSM) EndorseCert(tbs []byte, params EndorseCertParams) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify certificate chain: %v", err)
 	}
+	log.Printf("EndorseCert->Verify: %v", time.Since(keyStart))
+
 	return cert, nil
 }
 
 func (h *HSM) EndorseData(data []byte, params EndorseCertParams) ([]byte, []byte, error) {
+	var keyStart time.Time
+
+	keyStart = time.Now()
 	session, release := h.sessions.getHandle()
 	defer release()
+	log.Printf("EndorseData->getHandle: %v", time.Since(keyStart))
 
 	// Get the PKCS#11 private key object.
+	keyStart = time.Now()
 	keyID, err := GetKeyIDByLabel(session, pk11.ClassPrivateKey, params.KeyLabel)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fail to find key with label: %q, error: %v", params.KeyLabel, err)
 	}
+	log.Printf("EndorseData->GetKeyIDByLabel: %v", time.Since(keyStart))
+
+	keyStart = time.Now()
 	privateKey, err := session.FindPrivateKey(keyID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find private key object %q: %v", keyID, err)
 	}
+	log.Printf("EndorseData->FindPrivateKey: %v", time.Since(keyStart))
 
 	// Export the public key from the PKCS#11 private key object.
+	keyStart = time.Now()
 	publicKeyHandle, err := privateKey.FindPublicKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find public key on SE: %v", err)
 	}
+	log.Printf("EndorseData->FindPublicKey: %v", time.Since(keyStart))
+
+	keyStart = time.Now()
 	publicKey, err := publicKeyHandle.ExportKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to export public key from SE: %v", err)
 	}
+	log.Printf("EndorseData->ExportKey: %v", time.Since(keyStart))
+
 	asn1EcdsaPublicKey, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal public key: %v", err)
@@ -509,10 +557,12 @@ func (h *HSM) EndorseData(data []byte, params EndorseCertParams) ([]byte, []byte
 	}
 
 	// Sign the hash of the data payload.
+	keyStart = time.Now()
 	rb, sb, err := privateKey.SignECDSA(hash, data)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to sign: %v", err)
 	}
+	log.Printf("EndorseData->SignECDSA: %v", time.Since(keyStart))
 
 	// Encode the signature as ASN.1 DER.
 	var sig struct{ R, S *big.Int }

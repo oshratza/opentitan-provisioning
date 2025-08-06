@@ -9,6 +9,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc/codes"
@@ -109,11 +110,14 @@ func (s *server) CloseSession(ctx context.Context, request *pap.CloseSessionRequ
 func (s *server) EndorseCerts(ctx context.Context, request *pap.EndorseCertsRequest) (*pap.EndorseCertsResponse, error) {
 	log.Printf("PA.EndorseCerts Sku: %q", request.Sku)
 
+	log.Printf("In PA.EndorseCerts before calling spm.EndorseCerts, time is %q", time.Now().Format("15:04:05.000"))
 	r, err := s.spmClient.EndorseCerts(ctx, request)
 	if err != nil {
 		st := status.Convert(err)
 		return nil, status.Errorf(st.Code(), "SPM.EndorseCerts returned error: %s", st.Message())
 	}
+	log.Printf("In PA.EndorseCerts after calling spm.EndorseCerts, time is %q", time.Now().Format("15:04:05.000"))
+
 	return r, nil
 }
 
@@ -121,11 +125,13 @@ func (s *server) EndorseCerts(ctx context.Context, request *pap.EndorseCertsRequ
 // the SPM/HSM) and diversifier string.
 func (s *server) DeriveTokens(ctx context.Context, request *pap.DeriveTokensRequest) (*pap.DeriveTokensResponse, error) {
 	log.Printf("PA.DeriveTokens Sku: %q", request.Sku)
+	log.Printf("In PA.DeriveTokens before calling spm.DeriveTokens, time is %q", time.Now().Format("15:04:05.000"))
 	r, err := s.spmClient.DeriveTokens(ctx, request)
 	if err != nil {
 		st := status.Convert(err)
 		return nil, status.Errorf(st.Code(), "SPM.DeriveTokens returned error: %s", st.Message())
 	}
+	log.Printf("In PA.DeriveTokens after calling spm.DeriveTokens, time is %q", time.Now().Format("15:04:05.000"))
 	return r, nil
 }
 
@@ -171,13 +177,14 @@ func (s *server) GetOwnerFwBootMessage(ctx context.Context, request *pap.GetOwne
 func (s *server) RegisterDevice(ctx context.Context, request *pap.RegistrationRequest) (*pap.RegistrationResponse, error) {
 	log.Printf("PA.RegisterDevice Sku: %q", request.DeviceData.Sku)
 
-	// Extract ot.DeviceData to a raw byte buffer. 
+	// Extract ot.DeviceData to a raw byte buffer.
 	deviceDataBytes, err := proto.Marshal(request.DeviceData)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to marshal device data: %v err: %v", err, request.DeviceData)
 	}
 
 	// Verify the device data.
+	log.Printf("In PA.RegisterDevice before VerifyDeviceData, time is %q", time.Now().Format("15:04:05.000"))
 	if _, err := s.spmClient.VerifyDeviceData(ctx, &pbs.VerifyDeviceDataRequest{
 		DeviceData: request.DeviceData,
 		HashType:   request.HashType,
@@ -186,8 +193,10 @@ func (s *server) RegisterDevice(ctx context.Context, request *pap.RegistrationRe
 		st := status.Convert(err)
 		return nil, status.Errorf(st.Code(), "SPM.VerifyDeviceData returned error: %s", st.Message())
 	}
+	log.Printf("In PA.RegisterDevice after VerifyDeviceData, time is %q", time.Now().Format("15:04:05.000"))
 
 	// Endorse data payload.
+	log.Printf("In PA.RegisterDevice before EndorseData, time is %q", time.Now().Format("15:04:05.000"))
 	edRequest := &pbs.EndorseDataRequest{
 		Sku: request.DeviceData.Sku,
 		KeyParams: &certpb.SigningKeyParams{
@@ -207,6 +216,7 @@ func (s *server) RegisterDevice(ctx context.Context, request *pap.RegistrationRe
 		st := status.Convert(err)
 		return nil, status.Errorf(st.Code(), "SPM.EndorseData returned error: %s", st.Message())
 	}
+	log.Printf("In PA.RegisterDevice before EndorseData, time is %q", time.Now().Format("15:04:05.000"))
 
 	return rs.RegisterDevice(ctx, request, edResponse)
 }
