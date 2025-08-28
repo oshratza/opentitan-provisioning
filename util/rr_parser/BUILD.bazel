@@ -1,0 +1,20 @@
+# Copyright lowRISC contributors (OpenTitan project).
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@io_bazel_rules_go//go:def.bzl", "go_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+go_binary(
+    name = "rr_parser",
+    srcs = ["rr_parser.go"],
+    deps = [
+        "//src/ate:ate_go_lib",
+        "//src/proto:device_id_go_pb",
+        "//src/proto:registry_record_go_pb",
+        "//src/proxy_buffer/proto:proxy_buffer_go_pb",
+        "//src/utils",
+        "@com_github_golang_protobuf//proto:go_default_library",
+    ],
+)
